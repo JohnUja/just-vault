@@ -34,6 +34,19 @@ brew install awscli
 
 ### 2. Configure AWS Credentials
 
+**Option A: AWS SSO (Recommended - More Secure)**
+```bash
+# Configure SSO profile
+aws configure sso --profile just-vault
+
+# Login when needed
+aws sso login --profile just-vault
+
+# Verify
+aws sts get-caller-identity --profile just-vault
+```
+
+**Option B: Access Keys (Traditional)**
 ```bash
 aws configure
 ```
@@ -48,8 +61,15 @@ Enter:
 
 ```bash
 aws --version
+
+# For SSO:
+aws sts get-caller-identity --profile just-vault
+
+# For Access Keys:
 aws sts get-caller-identity
 ```
+
+**Note:** If using SSO, all commands in this guide need `--profile just-vault` flag. See `AWS_SSO_SETUP.md` for SSO-specific instructions.
 
 ---
 
@@ -64,7 +84,8 @@ Create a setup script to run everything at once:
 set -e  # Exit on error
 
 REGION="us-east-1"
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+PROFILE="just-vault"  # Change to "default" if using access keys
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile $PROFILE)
 BUCKET_NAME="just-vault-prod-blobs"
 TABLE_NAME="JustVault"
 USER_POOL_NAME="just-vault-prod-user-pool"
@@ -80,7 +101,8 @@ echo "📦 Creating S3 bucket..."
 aws s3api create-bucket \
   --bucket $BUCKET_NAME \
   --region $REGION \
-  --create-bucket-configuration LocationConstraint=$REGION
+  --create-bucket-configuration LocationConstraint=$REGION \
+  --profile $PROFILE
 
 # Block public access
 aws s3api put-public-access-block \
