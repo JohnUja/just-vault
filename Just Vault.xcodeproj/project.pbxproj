@@ -6,6 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		01BEC2032F2C94650018DC3D /* AWSCognitoIdentity in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2022F2C94650018DC3D /* AWSCognitoIdentity */; };
+		01BEC2052F2C94650018DC3D /* AWSCognitoIdentityProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2042F2C94650018DC3D /* AWSCognitoIdentityProvider */; };
+		01BEC2072F2C94650018DC3D /* AWSDynamoDB in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2062F2C94650018DC3D /* AWSDynamoDB */; };
+		01BEC2092F2C94650018DC3D /* AWSS3 in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2082F2C94650018DC3D /* AWSS3 */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		014821A22F24133A007C7387 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +59,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01BEC2032F2C94650018DC3D /* AWSCognitoIdentity in Frameworks */,
+				01BEC2072F2C94650018DC3D /* AWSDynamoDB in Frameworks */,
+				01BEC2092F2C94650018DC3D /* AWSS3 in Frameworks */,
+				01BEC2052F2C94650018DC3D /* AWSCognitoIdentityProvider in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,12 +83,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0136638D2F2C8C020055BB7F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		014821882F241333007C7387 = {
 			isa = PBXGroup;
 			children = (
 				014821932F241333007C7387 /* Just Vault */,
 				014821A42F24133A007C7387 /* Just VaultTests */,
 				014821AE2F24133A007C7387 /* Just VaultUITests */,
+				0136638D2F2C8C020055BB7F /* Frameworks */,
 				014821922F241333007C7387 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -112,6 +131,10 @@
 			);
 			name = "Just Vault";
 			packageProductDependencies = (
+				01BEC2022F2C94650018DC3D /* AWSCognitoIdentity */,
+				01BEC2042F2C94650018DC3D /* AWSCognitoIdentityProvider */,
+				01BEC2062F2C94650018DC3D /* AWSDynamoDB */,
+				01BEC2082F2C94650018DC3D /* AWSS3 */,
 			);
 			productName = "Just Vault";
 			productReference = 014821912F241333007C7387 /* Just Vault.app */;
@@ -195,6 +218,9 @@
 			);
 			mainGroup = 014821882F241333007C7387;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 014821922F241333007C7387 /* Products */;
 			projectDirPath = "";
@@ -393,12 +419,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Just Vault/Just Vault.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Just Vault/Preview Content\"";
 				DEVELOPMENT_TEAM = BWC2VJDMH9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Just-Vault-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -409,8 +438,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "JIT.Just-Vault";
+				PRODUCT_BUNDLE_IDENTIFIER = com.juvantagecloud.justvault;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -422,12 +452,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Just Vault/Just Vault.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Just Vault/Preview Content\"";
 				DEVELOPMENT_TEAM = BWC2VJDMH9;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Just-Vault-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -438,8 +471,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "JIT.Just-Vault";
+				PRODUCT_BUNDLE_IDENTIFIER = com.juvantagecloud.justvault;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -558,6 +592,40 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/awslabs/aws-sdk-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.6.44;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01BEC2022F2C94650018DC3D /* AWSCognitoIdentity */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */;
+			productName = AWSCognitoIdentity;
+		};
+		01BEC2042F2C94650018DC3D /* AWSCognitoIdentityProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */;
+			productName = AWSCognitoIdentityProvider;
+		};
+		01BEC2062F2C94650018DC3D /* AWSDynamoDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */;
+			productName = AWSDynamoDB;
+		};
+		01BEC2082F2C94650018DC3D /* AWSS3 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */;
+			productName = AWSS3;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 014821892F241333007C7387 /* Project object */;
 }

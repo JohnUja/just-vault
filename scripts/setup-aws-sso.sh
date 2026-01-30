@@ -4,6 +4,13 @@
 
 set -e  # Exit on error
 
+# ---- Learn mode / logging ----
+LOG_FILE="setup-run.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+PS4='+ [${BASH_SOURCE}:${LINENO}] '
+set -x  # prints each command before executing
+# ------------------------------
+
 PROFILE="just-vault"
 REGION="us-east-1"
 BUCKET_NAME="just-vault-prod-blobs"
@@ -12,6 +19,15 @@ USER_POOL_NAME="just-vault-prod-user-pool"
 IDENTITY_POOL_NAME="just-vault-prod-identity-pool"
 ROLE_NAME="JustVaultAuthenticatedUserRole"
 
+# ---- Dry run mode ----
+DRY_RUN="${DRY_RUN:-0}"
+AWS="aws"
+if [ "$DRY_RUN" = "1" ]; then
+  AWS="echo aws"
+  echo "🧪 DRY RUN enabled: commands will be printed, not executed."
+fi
+# ----------------------
+
 echo "🚀 Setting up Just Vault AWS infrastructure (SSO)..."
 echo "Profile: $PROFILE"
 echo "Region: $REGION"
@@ -19,7 +35,8 @@ echo ""
 
 # Verify SSO login
 echo "🔐 Verifying SSO authentication..."
-aws sts get-caller-identity --profile $PROFILE || {
+echo "WHY: SSO avoids long-lived access keys; sessions expire every 8h."
+$AWS sts get-caller-identity --profile $PROFILE || {
     echo "❌ Not logged in. Please run: aws sso login --profile $PROFILE"
     exit 1
 }
@@ -27,20 +44,22 @@ echo "✅ SSO authenticated"
 echo ""
 
 # Get Account ID
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile $PROFILE)
+ACCOUNT_ID=$($AWS sts get-caller-identity --query Account --output text --profile $PROFILE)
 echo "Account ID: $ACCOUNT_ID"
 echo ""
 
 # Step 1: Create S3 Bucket
 echo "📦 Creating S3 bucket..."
+echo "WHY: S3 stores blobs cheaply/durably; DynamoDB stores metadata; Cognito provides auth + temporary AWS creds."
+echo "WHY: S3 bucket is private + encrypted; per-user prefixes isolate data."
 # FIX: us-east-1 doesn't need LocationConstraint
 if [ "$REGION" = "us-east-1" ]; then
-  aws s3api create-bucket \
+  $AWS s3api create-bucket \
     --bucket $BUCKET_NAME \
     --region $REGION \
     --profile $PROFILE 2>&1 | grep -v "BucketAlreadyOwnedByYou" || true
 else
-  aws s3api create-bucket \
+  $AWS s3api create-bucket \
     --bucket $BUCKET_NAME \
     --region $REGION \
     --create-bucket-configuration LocationConstraint=$REGION \
@@ -48,14 +67,14 @@ else
 fi
 
 # Block public access
-aws s3api put-public-access-block \
+$AWS s3api put-public-access-block \
   --bucket $BUCKET_NAME \
   --public-access-block-configuration \
     "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true" \
   --profile $PROFILE
 
 # Enable encryption
-aws s3api put-bucket-encryption \
+$AWS s3api put-bucket-encryption \
   --bucket $BUCKET_NAME \
   --server-side-encryption-configuration '{
     "Rules": [{
@@ -66,22 +85,27 @@ aws s3api put-bucket-encryption \
   }' \
   --profile $PROFILE
 
-# Enable Intelligent-Tiering
-aws s3api put-bucket-intelligent-tiering-configuration \
-  --bucket $BUCKET_NAME \
-  --id "EntireBucket" \
-  --intelligent-tiering-configuration '{
-    "Id": "EntireBucket",
-    "Status": "Enabled",
-    "Filter": {}
-  }' \
-  --profile $PROFILE
+# Enable Intelligent-Tiering (optional - can be configured later via console)
+# Note: Requires Tierings array in configuration, skipping for now
+# $AWS s3api put-bucket-intelligent-tiering-configuration \
+#   --bucket $BUCKET_NAME \
+#   --id "EntireBucket" \
+#   --intelligent-tiering-configuration '{
+#     "Id": "EntireBucket",
+#     "Status": "Enabled",
+#     "Filter": {},
+#     "Tierings": [{"Days": 90, "AccessTier": "ARCHIVE_ACCESS"}]
+#   }' \
+#   --profile $PROFILE
+echo "   (Intelligent-Tiering can be configured later via AWS Console if needed)"
 
 echo "✅ S3 bucket created/configured"
 
 # Step 2: Create DynamoDB Table
 echo "📊 Creating DynamoDB table..."
-aws dynamodb create-table \
+echo "WHY: DynamoDB is on-demand to avoid capacity planning early."
+echo "WHY: Single-table design with PK=USER#<sub> enables efficient per-user queries."
+$AWS dynamodb create-table \
   --table-name $TABLE_NAME \
   --attribute-definitions \
     AttributeName=PK,AttributeType=S \
@@ -101,10 +125,11 @@ echo "✅ DynamoDB table created/verified"
 
 # Step 3: Create Cognito User Pool
 echo "🔐 Creating Cognito User Pool..."
-USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 --profile $PROFILE --query "UserPools[?Name=='$USER_POOL_NAME'].Id" --output text 2>/dev/null || echo "")
+echo "WHY: User Pool authenticates; Identity Pool converts auth into scoped AWS creds."
+USER_POOL_ID=$($AWS cognito-idp list-user-pools --max-results 60 --profile $PROFILE --query "UserPools[?Name=='$USER_POOL_NAME'].Id" --output text 2>/dev/null || echo "")
 
 if [ -z "$USER_POOL_ID" ]; then
-  USER_POOL_ID=$(aws cognito-idp create-user-pool \
+  USER_POOL_ID=$($AWS cognito-idp create-user-pool \
     --pool-name $USER_POOL_NAME \
     --policies '{
       "PasswordPolicy": {
@@ -134,14 +159,15 @@ fi
 
 # Step 4: Create User Pool Client (PUBLIC - no secret for iOS)
 echo "📱 Creating User Pool Client (public, no secret for iOS)..."
-CLIENT_ID=$(aws cognito-idp list-user-pool-clients \
+echo "WHY: iOS apps cannot securely store secrets; public client uses SRP auth flow."
+CLIENT_ID=$($AWS cognito-idp list-user-pool-clients \
   --user-pool-id $USER_POOL_ID \
   --profile $PROFILE \
   --query "UserPoolClients[?ClientName=='just-vault-ios-client'].ClientId" \
   --output text 2>/dev/null || echo "")
 
 if [ -z "$CLIENT_ID" ]; then
-  CLIENT_ID=$(aws cognito-idp create-user-pool-client \
+  CLIENT_ID=$($AWS cognito-idp create-user-pool-client \
     --user-pool-id $USER_POOL_ID \
     --client-name "just-vault-ios-client" \
     --no-generate-secret \
@@ -156,8 +182,9 @@ fi
 
 # Step 5: Create IAM Role for Authenticated Users
 echo "👤 Creating IAM Role..."
+echo "WHY: IAM role restricts each user to only their own files/records via PK=USER#<sub> condition."
 # Check if role exists
-ROLE_ARN=$(aws iam get-role --role-name $ROLE_NAME --profile $PROFILE --query 'Role.Arn' --output text 2>/dev/null || echo "")
+ROLE_ARN=$($AWS iam get-role --role-name $ROLE_NAME --profile $PROFILE --query 'Role.Arn' --output text 2>/dev/null || echo "")
 
 if [ -z "$ROLE_ARN" ]; then
   # Create trust policy (will update with Identity Pool ID later)
@@ -182,7 +209,7 @@ if [ -z "$ROLE_ARN" ]; then
 }
 EOF
 
-  ROLE_ARN=$(aws iam create-role \
+  ROLE_ARN=$($AWS iam create-role \
     --role-name $ROLE_NAME \
     --assume-role-policy-document file:///tmp/trust-policy.json \
     --query 'Role.Arn' \
@@ -195,6 +222,7 @@ fi
 
 # Step 6: Create and Attach S3 Policy
 echo "📄 Creating S3 IAM Policy..."
+echo "WHY: S3 policy restricts users to their own prefix (users/<sub>/*) preventing cross-user access."
 cat > /tmp/s3-policy.json <<EOF
 {
   "Version": "2012-10-17",
@@ -226,7 +254,7 @@ cat > /tmp/s3-policy.json <<EOF
 }
 EOF
 
-aws iam put-role-policy \
+$AWS iam put-role-policy \
   --role-name $ROLE_NAME \
   --policy-name S3AccessPolicy \
   --policy-document file:///tmp/s3-policy.json \
@@ -236,6 +264,7 @@ echo "✅ S3 Policy attached"
 
 # Step 7: Create and Attach DynamoDB Policy
 echo "📄 Creating DynamoDB IAM Policy..."
+echo "WHY: DynamoDB policy restricts queries to PK=USER#<sub> ensuring users only access their own records."
 cat > /tmp/dynamodb-policy.json <<EOF
 {
   "Version": "2012-10-17",
@@ -260,7 +289,7 @@ cat > /tmp/dynamodb-policy.json <<EOF
 }
 EOF
 
-aws iam put-role-policy \
+$AWS iam put-role-policy \
   --role-name $ROLE_NAME \
   --policy-name DynamoDBAccessPolicy \
   --policy-document file:///tmp/dynamodb-policy.json \
@@ -270,16 +299,17 @@ echo "✅ DynamoDB Policy attached"
 
 # Step 8: Create Cognito Identity Pool
 echo "🆔 Creating Cognito Identity Pool..."
-IDENTITY_POOL_ID=$(aws cognito-identity list-identity-pools \
+echo "WHY: Identity Pool exchanges User Pool tokens for temporary AWS credentials scoped to IAM role."
+IDENTITY_POOL_ID=$($AWS cognito-identity list-identity-pools \
   --max-results 60 \
   --profile $PROFILE \
   --query "IdentityPools[?IdentityPoolName=='$IDENTITY_POOL_NAME'].IdentityPoolId" \
   --output text 2>/dev/null || echo "")
 
 if [ -z "$IDENTITY_POOL_ID" ]; then
-  IDENTITY_POOL_ID=$(aws cognito-identity create-identity-pool \
+  IDENTITY_POOL_ID=$($AWS cognito-identity create-identity-pool \
     --identity-pool-name $IDENTITY_POOL_NAME \
-    --allow-unauthenticated-identities false \
+    --no-allow-unauthenticated-identities \
     --cognito-identity-providers \
       ProviderName=cognito-idp.$REGION.amazonaws.com/$USER_POOL_ID,ClientId=$CLIENT_ID \
     --query 'IdentityPoolId' \
@@ -292,8 +322,9 @@ fi
 
 # Step 9: Update IAM Role Trust Policy with Identity Pool ID
 echo "🔗 Updating IAM Role trust policy..."
+echo "WHY: Trust policy must reference specific Identity Pool ID to prevent unauthorized role assumption."
 sed "s/IDENTITY_POOL_ID_PLACEHOLDER/$IDENTITY_POOL_ID/g" /tmp/trust-policy.json > /tmp/trust-policy-updated.json
-aws iam update-assume-role-policy \
+$AWS iam update-assume-role-policy \
   --role-name $ROLE_NAME \
   --policy-document file:///tmp/trust-policy-updated.json \
   --profile $PROFILE
@@ -302,7 +333,8 @@ echo "✅ IAM Role trust policy updated"
 
 # Step 10: Link Role to Identity Pool
 echo "🔗 Linking IAM Role to Identity Pool..."
-aws cognito-identity set-identity-pool-roles \
+echo "WHY: Links authenticated users from Identity Pool to IAM role with scoped permissions."
+$AWS cognito-identity set-identity-pool-roles \
   --identity-pool-id $IDENTITY_POOL_ID \
   --roles authenticated=$ROLE_ARN \
   --profile $PROFILE
@@ -311,26 +343,28 @@ echo "✅ Identity Pool roles configured"
 
 # Step 11: Create CloudWatch Log Groups
 echo "📝 Creating CloudWatch Log Groups..."
+echo "WHY: Centralized logging for app events, sync operations, and errors with retention policies."
 for LOG_GROUP in "/aws/just-vault/app" "/aws/just-vault/sync" "/aws/just-vault/errors"; do
-  aws logs create-log-group \
+  $AWS logs create-log-group \
     --log-group-name $LOG_GROUP \
     --profile $PROFILE 2>&1 | grep -v "ResourceAlreadyExistsException" || true
 done
 
-aws logs put-retention-policy --log-group-name /aws/just-vault/app --retention-in-days 7 --profile $PROFILE
-aws logs put-retention-policy --log-group-name /aws/just-vault/sync --retention-in-days 7 --profile $PROFILE
-aws logs put-retention-policy --log-group-name /aws/just-vault/errors --retention-in-days 30 --profile $PROFILE
+$AWS logs put-retention-policy --log-group-name /aws/just-vault/app --retention-in-days 7 --profile $PROFILE
+$AWS logs put-retention-policy --log-group-name /aws/just-vault/sync --retention-in-days 7 --profile $PROFILE
+$AWS logs put-retention-policy --log-group-name /aws/just-vault/errors --retention-in-days 30 --profile $PROFILE
 
 echo "✅ CloudWatch Log Groups created/configured"
 
 # Step 12: Add Cost Allocation Tags
 echo "💰 Tagging resources..."
-aws s3api put-bucket-tagging \
+echo "WHY: Tags enable cost tracking and resource organization in AWS billing."
+$AWS s3api put-bucket-tagging \
   --bucket $BUCKET_NAME \
   --tagging 'TagSet=[{Key=Environment,Value=production},{Key=App,Value=just-vault}]' \
   --profile $PROFILE
 
-aws dynamodb tag-resource \
+$AWS dynamodb tag-resource \
   --resource-arn "arn:aws:dynamodb:$REGION:$ACCOUNT_ID:table/$TABLE_NAME" \
   --tags Key=Environment,Value=production Key=App,Value=just-vault \
   --profile $PROFILE

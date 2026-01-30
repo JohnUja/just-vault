@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Just Vault needs access to your photos to securely store them in your vault.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Just Vault needs camera access to capture photos and securely store them in your vault.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Just Vault needs access to your files to securely store them in your vault.</string>
+</dict>
+</plist>
