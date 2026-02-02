@@ -11,6 +11,7 @@
 		01BEC2052F2C94650018DC3D /* AWSCognitoIdentityProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2042F2C94650018DC3D /* AWSCognitoIdentityProvider */; };
 		01BEC2072F2C94650018DC3D /* AWSDynamoDB in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2062F2C94650018DC3D /* AWSDynamoDB */; };
 		01BEC2092F2C94650018DC3D /* AWSS3 in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2082F2C94650018DC3D /* AWSS3 */; };
+		01BEC2422F2E692A0018DC3D /* Bip39 in Frameworks */ = {isa = PBXBuildFile; productRef = 01BEC2412F2E692A0018DC3D /* Bip39 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +64,7 @@
 				01BEC2072F2C94650018DC3D /* AWSDynamoDB in Frameworks */,
 				01BEC2092F2C94650018DC3D /* AWSS3 in Frameworks */,
 				01BEC2052F2C94650018DC3D /* AWSCognitoIdentityProvider in Frameworks */,
+				01BEC2422F2E692A0018DC3D /* Bip39 in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,6 +137,7 @@
 				01BEC2042F2C94650018DC3D /* AWSCognitoIdentityProvider */,
 				01BEC2062F2C94650018DC3D /* AWSDynamoDB */,
 				01BEC2082F2C94650018DC3D /* AWSS3 */,
+				01BEC2412F2E692A0018DC3D /* Bip39 */,
 			);
 			productName = "Just Vault";
 			productReference = 014821912F241333007C7387 /* Just Vault.app */;
@@ -220,6 +223,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */,
+				01BEC2402F2E692A0018DC3D /* XCRemoteSwiftPackageReference "Bip39.swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 014821922F241333007C7387 /* Products */;
@@ -602,6 +606,14 @@
 				minimumVersion = 1.6.44;
 			};
 		};
+		01BEC2402F2E692A0018DC3D /* XCRemoteSwiftPackageReference "Bip39.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tesseract-one/Bip39.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.2.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -624,6 +636,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 01BEC2012F2C94650018DC3D /* XCRemoteSwiftPackageReference "aws-sdk-swift" */;
 			productName = AWSS3;
+		};
+		01BEC2412F2E692A0018DC3D /* Bip39 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 01BEC2402F2E692A0018DC3D /* XCRemoteSwiftPackageReference "Bip39.swift" */;
+			productName = Bip39;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

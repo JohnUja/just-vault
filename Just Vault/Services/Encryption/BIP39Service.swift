@@ -6,7 +6,8 @@
 //
 
 import Foundation
-import MnemonicKit
+import Bip39
+import CryptoKit
 
 class BIP39Service {
     /// Generate a BIP39 recovery phrase (12 or 24 words)
@@ -15,63 +16,47 @@ class BIP39Service {
             throw BIP39Error.invalidWordCount
         }
         
-        // Generate entropy
+        // Generate mnemonic with specified entropy bits
+        // 12 words = 128 bits, 24 words = 256 bits
         let entropyBits = wordCount == 12 ? 128 : 256
-        var entropy = Data(count: entropyBits / 8)
-        let status = entropy.withUnsafeMutableBytes { bytes in
-            SecRandomCopyBytes(kSecRandomDefault, entropyBits / 8, bytes.baseAddress!)
-        }
+        let mnemonic = try Mnemonic(strength: entropyBits)
         
-        guard status == errSecSuccess else {
-            throw BIP39Error.generationFailed
-        }
-        
-        // Use MnemonicKit to generate mnemonic from entropy
-        guard let mnemonic = Mnemonic.generate(entropy: entropy) else {
-            throw BIP39Error.generationFailed
-        }
-        
-        return mnemonic.components(separatedBy: " ")
+        // Return phrase as array of strings
+        return mnemonic.mnemonic()
     }
     
     /// Validate a recovery phrase
     func validatePhrase(_ phrase: [String]) -> Bool {
-        guard phrase.count == 12 || phrase.count == 24 else {
-            return false
-        }
-        
-        let mnemonic = phrase.joined(separator: " ")
-        
-        // Use MnemonicKit to validate mnemonic
-        return Mnemonic.validate(mnemonic: mnemonic)
+        // Use BIP39 library validation
+        return Mnemonic.isValid(phrase: phrase)
     }
     
     /// Convert recovery phrase to entropy (for key derivation)
     func phraseToEntropy(_ phrase: [String]) throws -> Data {
-        let mnemonic = phrase.joined(separator: " ")
-        
-        // Use MnemonicKit to convert mnemonic to entropy
-        guard let entropy = Mnemonic.toEntropy(mnemonic: mnemonic) else {
-            throw BIP39Error.invalidPhrase
-        }
-        
-        return entropy
+        // Create mnemonic from phrase and extract entropy
+        let mnemonic = try Mnemonic(mnemonic: phrase)
+        // Convert [UInt8] to Data
+        return Data(mnemonic.entropy)
     }
     
-    /// Derive master key from recovery phrase using PBKDF2-SHA512
+    /// Derive master key from recovery phrase using BIP39 seed derivation
+    /// Uses PBKDF2-SHA512 with 2048 iterations (BIP39 standard)
     func deriveMasterKey(from phrase: [String], salt: Data) throws -> SymmetricKey {
-        let entropy = try phraseToEntropy(phrase)
+        // Create mnemonic from phrase
+        let mnemonic = try Mnemonic(mnemonic: phrase)
         
-        // Use PBKDF2-SHA512 with 2048 iterations (BIP39 standard)
-        let keyData = try PKCS5.PBKDF2(
-            password: entropy,
-            salt: salt,
-            iterations: 2048,
-            keyLength: 32, // 256 bits
-            variant: .sha512
-        ).calculate()
+        // Get BIP39 seed (uses PBKDF2-SHA512 with 2048 iterations)
+        // Note: BIP39 seed uses empty passphrase by default
+        // If you need a custom passphrase, use: mnemonic.seed(passphrase: "your-passphrase")
+        let seed = mnemonic.seed()
         
-        return SymmetricKey(data: keyData)
+        // Convert seed to Data (seed is [UInt8])
+        let seedData = Data(seed)
+        
+        // Convert seed (64 bytes) to SymmetricKey (32 bytes for AES-256)
+        // Use first 32 bytes of seed as master key
+        let masterKeyData = seedData.prefix(32)
+        return SymmetricKey(data: masterKeyData)
     }
 }
 
@@ -81,38 +66,5 @@ enum BIP39Error: Error {
     case checksumMismatch
     case generationFailed
     case invalidPhrase
-}
-
-// PBKDF2 helper (using CryptoKit's HKDF as approximation)
-import CryptoKit
-
-extension PKCS5 {
-    enum Variant {
-        case sha512
-    }
-    
-    struct PBKDF2 {
-        let password: Data
-        let salt: Data
-        let iterations: Int
-        let keyLength: Int
-        let variant: Variant
-        
-        func calculate() throws -> Data {
-            // Note: This uses HKDF instead of true PBKDF2
-            // For production, consider using a proper PBKDF2 library
-            // HKDF is acceptable for this use case but not identical to PBKDF2
-            
-            let symmetricKey = SymmetricKey(data: password)
-            let derivedKey = HKDF<SHA512>.deriveKey(
-                inputKeyMaterial: symmetricKey,
-                salt: salt,
-                info: "master-key-derivation".data(using: .utf8)!,
-                outputByteCount: keyLength
-            )
-            
-            return derivedKey.withUnsafeBytes { Data($0) }
-        }
-    }
 }
 

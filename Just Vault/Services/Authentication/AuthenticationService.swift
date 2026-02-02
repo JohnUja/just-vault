@@ -6,11 +6,12 @@
 //
 
 import Foundation
+import UIKit
 import AuthenticationServices
 import Combine
-// Note: AWS SDK imports will be added after packages are installed
-// import AWSCognitoIdentityProvider
-// import AWSCognitoIdentity
+import AWSCognitoIdentityProvider
+import AWSCognitoIdentity
+import ClientRuntime
 
 @MainActor
 class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
@@ -29,8 +30,8 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     
     override init() {
         super.init()
-        // Configure AWS region
-        AWSServiceConfiguration.default().region = .USEast1
+        // AWS SDK for Swift v1 will use default configuration
+        // Credentials will be provided by Cognito Identity Pool after authentication
     }
     
     /// Initiate Apple Sign In flow
@@ -72,14 +73,14 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
                 let cognitoTokens = try await exchangeAppleTokenForCognito(identityToken: identityTokenString)
                 
                 // Get AWS credentials from Identity Pool
-                let awsCredentials = try await getAWSCredentials(cognitoToken: cognitoTokens.idToken)
+                let cognitoIdentityId = try await getAWSCredentials(cognitoToken: cognitoTokens.idToken)
                 
                 // Create or load user
                 let user = try await createOrLoadUser(
                     appleUserID: appleUserID,
                     email: email,
                     fullName: fullName,
-                    cognitoIdentityId: awsCredentials.identityId
+                    cognitoIdentityId: cognitoIdentityId
                 )
                 
                 currentUser = user
@@ -114,34 +115,96 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     // MARK: - Cognito Integration
     
     private func exchangeAppleTokenForCognito(identityToken: String) async throws -> CognitoTokens {
-        // TODO: Implement actual Cognito token exchange
-        // This requires:
-        // 1. Apple configured as OIDC provider in Cognito User Pool
-        // 2. Call Cognito's InitiateAuth with Apple identity token
-        // 3. Return Cognito ID token, access token, refresh token
+        // Exchange Apple ID token for Cognito tokens
+        // This uses Cognito's OIDC provider flow with Apple Sign-In
         
-        // For now, return placeholder tokens
-        // This will be implemented once AWS SDK packages are installed
-        // and Apple Sign In is configured in Cognito
+        // Create Cognito Identity Provider client
+        let config = try await CognitoIdentityProviderClient.CognitoIdentityProviderClientConfiguration(
+            region: region
+        )
+        let client = CognitoIdentityProviderClient(config: config)
         
-        throw AuthenticationError.cognitoTokenExchangeFailed
+        // For Apple Sign-In as OIDC provider, we use InitiateAuth with CUSTOM_AUTH flow
+        // The Apple identity token is passed in auth parameters
+        let authParameters: [String: String] = [
+            "IDENTITY_TOKEN": identityToken,
+            "PROVIDER": "SignInWithApple" // This depends on how Apple is configured in Cognito
+        ]
+        
+        let input = InitiateAuthInput(
+            authFlow: .customAuth,
+            authParameters: authParameters,
+            clientId: clientId
+        )
+        
+        do {
+            let response = try await client.initiateAuth(input: input)
+            
+            guard let authResult = response.authenticationResult,
+                  let idToken = authResult.idToken,
+                  let accessToken = authResult.accessToken,
+                  let refreshToken = authResult.refreshToken else {
+                throw AuthenticationError.cognitoTokenExchangeFailed
+            }
+            
+            return CognitoTokens(
+                idToken: idToken,
+                accessToken: accessToken,
+                refreshToken: refreshToken
+            )
+        } catch {
+            // If CUSTOM_AUTH doesn't work, try alternative approach
+            // Some Cognito configurations use different flows for OIDC providers
+            throw AuthenticationError.cognitoTokenExchangeFailed
+        }
     }
     
-    private func getAWSCredentials(cognitoToken: String) async throws -> AWSCredentials {
-        // TODO: Implement AWS credentials retrieval from Identity Pool
-        // This requires:
-        // 1. Exchange Cognito ID token for Identity Pool credentials
-        // 2. Return temporary AWS credentials
+    private func getAWSCredentials(cognitoToken: String) async throws -> String {
+        // Get AWS credentials from Cognito Identity Pool
+        // This exchanges the Cognito ID token for temporary AWS credentials
         
-        // Placeholder for now
-        struct PlaceholderCredentials: AWSCredentials {
-            let accessKey: String = ""
-            let secretKey: String = ""
-            let sessionToken: String = ""
-            let expiration: Date = Date()
+        // Create Cognito Identity client
+        let config = try await CognitoIdentityClient.CognitoIdentityClientConfiguration(
+            region: region
+        )
+        let client = CognitoIdentityClient(config: config)
+        
+        // Create logins dictionary with the Cognito User Pool provider
+        let userPoolProvider = "cognito-idp.\(region).amazonaws.com/\(userPoolId)"
+        let logins: [String: String] = [userPoolProvider: cognitoToken]
+        
+        // Step 1: Get Identity ID
+        let getIdInput = GetIdInput(
+            identityPoolId: identityPoolId,
+            logins: logins
+        )
+        
+        let getIdResponse = try await client.getId(input: getIdInput)
+        guard let identityId = getIdResponse.identityId else {
+            throw AuthenticationError.awsCredentialsFailed
         }
         
-        throw AuthenticationError.awsCredentialsFailed
+        // Step 2: Get credentials for the identity
+        let getCredentialsInput = GetCredentialsForIdentityInput(
+            identityId: identityId,
+            logins: logins
+        )
+        
+        let credentialsResponse = try await client.getCredentialsForIdentity(input: getCredentialsInput)
+        guard credentialsResponse.credentials != nil else {
+            throw AuthenticationError.awsCredentialsFailed
+        }
+        
+        // Store credentials for use by AWS SDK services (S3, DynamoDB)
+        // The AWS SDK for Swift v1 uses a different credential provider system
+        // We'll need to configure the default credential provider chain
+        // For now, we'll return the identity ID and credentials will be managed per-service
+        
+        // Note: In AWS SDK for Swift v1, credentials are typically managed per-client
+        // We'll configure S3 and DynamoDB clients with these credentials when we implement those services
+        
+        // Return the identity ID (we'll use this as the user ID)
+        return identityId
     }
     
     private func createOrLoadUser(

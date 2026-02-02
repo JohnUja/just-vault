@@ -58,19 +58,10 @@ class EncryptionService {
             outputByteCount: 32
         )
         
-        // 3. Extract components
-        let nonceData = encryptedData.prefix(12)
-        let tagData = encryptedData.suffix(16)
-        let ciphertextData = encryptedData.dropFirst(12).dropLast(16)
-        
-        // 4. Reconstruct sealed box
-        let nonce = try AES.GCM.Nonce(data: nonceData)
-        let tag = try AES.GCM.SealedBox.Tag(data: tagData)
-        let sealedBox = try AES.GCM.SealedBox(
-            nonce: nonce,
-            ciphertext: ciphertextData,
-            tag: tag
-        )
+        // 3. Reconstruct sealed box from combined data
+        // CryptoKit's SealedBox(combined:) expects: nonce (12 bytes) + ciphertext + tag (16 bytes)
+        // Our format is already: nonce (12) + ciphertext + tag (16), so we can use it directly
+        let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
         
         // 5. Decrypt
         do {

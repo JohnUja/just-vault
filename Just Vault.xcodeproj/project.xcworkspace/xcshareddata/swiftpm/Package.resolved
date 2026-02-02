@@ -1,5 +1,5 @@
 {
-  "originHash" : "dacbc9c87b8abc8fcb4a070842c855f7a74d4cc72b4474858f09844787811b5a",
+  "originHash" : "e1788b26f1cbed7c7163d1aa64458bd4ba6b18958d012ac72032df799cd0b61c",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "e20021daf83400b8139cb1a6b491158741970da8",
         "version" : "1.6.44"
+      }
+    },
+    {
+      "identity" : "bip39.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tesseract-one/Bip39.swift.git",
+      "state" : {
+        "revision" : "bb2b82539d685e1457493b695cdc8e4dcff97c92",
+        "version" : "0.2.0"
       }
     },
     {
@@ -278,6 +287,15 @@
       "state" : {
         "revision" : "18ff09e6b30e589ed38f90a1af23e193b8ecef8e",
         "version" : "1.1.2"
+      }
+    },
+    {
+      "identity" : "uncommoncrypto.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tesseract-one/UncommonCrypto.swift.git",
+      "state" : {
+        "revision" : "075344faec47dadba98bef6a319e310c98be0820",
+        "version" : "0.2.1"
       }
     }
   ],
