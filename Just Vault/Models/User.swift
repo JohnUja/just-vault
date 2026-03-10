@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct User: Codable, Identifiable {
+struct User: Codable, Identifiable, Equatable {
     let id: String // Cognito Identity ID
     let appleUserId: String // Apple Sign In user ID
     let email: String?
@@ -37,7 +37,24 @@ struct User: Codable, Identifiable {
     }
     
     var isPro: Bool {
-        subscriptionTier == .pro
+        if DeveloperMode.isEnabled {
+            return true // Developer mode unlocks all features
+        }
+        return subscriptionTier == .pro || subscriptionTier == .proPlus
+    }
+    
+    var hasCloudBackup: Bool {
+        if DeveloperMode.isEnabled {
+            return true // Developer mode unlocks cloud backup
+        }
+        return subscriptionTier != .free
+    }
+    
+    var effectiveTier: SubscriptionTier {
+        if DeveloperMode.isEnabled {
+            return .proPlus // Developer mode = Pro+
+        }
+        return subscriptionTier
     }
     
     var canCreateMoreSpaces: Bool {
@@ -51,7 +68,32 @@ struct User: Codable, Identifiable {
 
 enum SubscriptionTier: String, Codable {
     case free
-    case pro
+    case pro      // 10GB storage
+    case proPlus  // 50GB storage
+    
+    var displayName: String {
+        switch self {
+        case .free: return "Free"
+        case .pro: return "Pro"
+        case .proPlus: return "Pro+"
+        }
+    }
+    
+    var cloudStorageMB: Int64 {
+        switch self {
+        case .free: return 0  // No cloud storage
+        case .pro: return 10_000  // 10GB
+        case .proPlus: return 50_000  // 50GB
+        }
+    }
+    
+    var maxSpaces: Int {
+        switch self {
+        case .free: return 3
+        case .pro: return 20
+        case .proPlus: return 20
+        }
+    }
 }
 
 enum SubscriptionStatus: String, Codable {

@@ -73,7 +73,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
                 let cognitoTokens = try await exchangeAppleTokenForCognito(identityToken: identityTokenString)
                 
                 // Get AWS credentials from Identity Pool
-                let cognitoIdentityId = try await getAWSCredentials(cognitoToken: cognitoTokens.idToken)
+                let cognitoIdentityId = try await getAWSCredentials(cognitoToken: cognitoTokens.idToken, tokens: cognitoTokens)
                 
                 // Create or load user
                 let user = try await createOrLoadUser(
@@ -159,7 +159,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         }
     }
     
-    private func getAWSCredentials(cognitoToken: String) async throws -> String {
+    private func getAWSCredentials(cognitoToken: String, tokens: CognitoTokens) async throws -> String {
         // Get AWS credentials from Cognito Identity Pool
         // This exchanges the Cognito ID token for temporary AWS credentials
         
@@ -191,17 +191,24 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         )
         
         let credentialsResponse = try await client.getCredentialsForIdentity(input: getCredentialsInput)
-        guard credentialsResponse.credentials != nil else {
+        guard let awsCredentials = credentialsResponse.credentials else {
             throw AuthenticationError.awsCredentialsFailed
         }
         
-        // Store credentials for use by AWS SDK services (S3, DynamoDB)
-        // The AWS SDK for Swift v1 uses a different credential provider system
-        // We'll need to configure the default credential provider chain
-        // For now, we'll return the identity ID and credentials will be managed per-service
-        
-        // Note: In AWS SDK for Swift v1, credentials are typically managed per-client
-        // We'll configure S3 and DynamoDB clients with these credentials when we implement those services
+        // Store credentials in CredentialManager
+        do {
+            try CredentialManager.shared.storeCredentials(
+                identityId: identityId,
+                accessKeyId: awsCredentials.accessKeyId,
+                secretAccessKey: awsCredentials.secretKey, // Note: AWS SDK uses 'secretKey' not 'secretAccessKey'
+                sessionToken: awsCredentials.sessionToken,
+                expiration: awsCredentials.expiration,
+                tokens: tokens
+            )
+        } catch {
+            // Log error but don't fail authentication
+            print("Failed to store credentials: \(error.localizedDescription)")
+        }
         
         // Return the identity ID (we'll use this as the user ID)
         return identityId
@@ -245,12 +252,61 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     // MARK: - Local Storage Helpers
     
     private func loadUserFromLocalStorage(identityId: String) async throws -> User {
-        // TODO: Load from UserDefaults or Core Data
-        throw AuthenticationError.userNotFound
+        // Load user ID from UserDefaults
+        guard let savedUserId = UserDefaults.standard.string(forKey: "currentUserId"),
+              savedUserId == identityId else {
+            throw AuthenticationError.userNotFound
+        }
+        
+        // Load user JSON from UserDefaults
+        let userKey = "currentUser_\(identityId)"
+        guard let userData = UserDefaults.standard.data(forKey: userKey) else {
+            throw AuthenticationError.userNotFound
+        }
+        
+        // Decode user from JSON
+        let decoder = JSONDecoder()
+        do {
+            let user = try decoder.decode(User.self, from: userData)
+            return user
+        } catch {
+            throw AuthenticationError.userNotFound
+        }
     }
     
-    private func saveUserToLocalStorage(_ user: User) async throws {
-        // TODO: Save to UserDefaults or Core Data
+    func saveUserToLocalStorage(_ user: User) async throws {
+        // Encode user to JSON
+        let encoder = JSONEncoder()
+        guard let userData = try? encoder.encode(user) else {
+            throw AuthenticationError.notImplemented
+        }
+        
+        // Save user ID for quick lookup
+        UserDefaults.standard.set(user.id, forKey: "currentUserId")
+        
+        // Save user JSON with identity ID as key
+        let userKey = "currentUser_\(user.id)"
+        UserDefaults.standard.set(userData, forKey: userKey)
+        
+        // Synchronize to ensure data is saved
+        UserDefaults.standard.synchronize()
+    }
+    
+    // MARK: - Load Current User
+    
+    func loadCurrentUser() async -> User? {
+        // Get current user ID from UserDefaults
+        guard let userId = UserDefaults.standard.string(forKey: "currentUserId") else {
+            return nil
+        }
+        
+        // Try to load user from local storage
+        do {
+            let user = try await loadUserFromLocalStorage(identityId: userId)
+            return user
+        } catch {
+            return nil
+        }
     }
     
     // MARK: - Sign Out
@@ -261,7 +317,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         isAuthenticated = false
         
         // Clear AWS credentials
-        // TODO: Clear Cognito tokens from keychain
+        CredentialManager.shared.clearCredentials()
         
         // Clear local storage
         UserDefaults.standard.removeObject(forKey: "currentUser")

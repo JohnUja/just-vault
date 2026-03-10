@@ -13,5 +13,9 @@
 	<string>Just Vault needs camera access to capture photos and securely store them in your vault.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Just Vault needs access to your files to securely store them in your vault.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Just Vault uses Face ID to securely unlock your vault and protect your encrypted files.</string>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
 </dict>
 </plist>

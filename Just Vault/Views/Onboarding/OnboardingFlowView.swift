@@ -14,9 +14,14 @@ struct OnboardingFlowView: View {
     
     var body: some View {
         ZStack {
-            // Background gradient
+            // Background - Bright purple/pink + white gradient (app-wide)
             LinearGradient(
-                colors: [Color(hex: "007AFF").opacity(0.1), Color(hex: "5856D6").opacity(0.1)],
+                colors: [
+                    Color(red: 0.9, green: 0.5, blue: 0.9), // Bright purple/pink
+                    Color(red: 0.8, green: 0.4, blue: 0.85), // Medium purple/pink
+                    Color.white.opacity(0.9), // White
+                    Color(red: 0.85, green: 0.45, blue: 0.9).opacity(0.8) // Light purple/pink
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )

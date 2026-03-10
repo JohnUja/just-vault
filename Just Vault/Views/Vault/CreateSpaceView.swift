@@ -15,38 +15,35 @@ struct CreateSpaceView: View {
     @State private var selectedIcon: String = "doc.text.fill"
     @State private var selectedColor: String = "#007AFF"
     
-    // Expanded icon list (30+ icons)
+    // Limited to 8 icons (4 per row)
     let icons = [
         "doc.text.fill", "briefcase.fill", "heart.fill", "house.fill",
-        "star.fill", "book.fill", "camera.fill", "music.note",
-        "photo.fill", "folder.fill", "lock.fill", "key.fill",
-        "creditcard.fill", "dollarsign.circle.fill", "chart.bar.fill",
-        "paintbrush.fill", "pencil.fill", "scissors.fill", "paperclip.fill",
-        "envelope.fill", "phone.fill", "message.fill", "calendar.fill",
-        "clock.fill", "bell.fill", "flag.fill", "tag.fill",
-        "magnifyingglass", "map.fill", "car.fill", "airplane.fill",
-        "gamecontroller.fill", "tv.fill", "headphones", "gift.fill"
+        "star.fill", "book.fill", "camera.fill", "folder.fill"
     ]
     
-    // Expanded color palette (20 colors)
+    // Limited to 8 colors (4 per row)
     let colors = [
-        "#007AFF", "#FF3B30", "#34C759", "#FF9500", "#AF52DE",
-        "#FF2D55", "#5856D6", "#00C7BE", "#FFCC00", "#FF6B6B",
-        "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD",
-        "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739"
+        "#007AFF", "#FF3B30", "#34C759", "#FF9500",
+        "#AF52DE", "#5856D6", "#00C7BE", "#FFCC00"
     ]
     
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Space Name Section
+                    // Folder Name Section
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Space Name")
-                            .font(.headline)
-                            .foregroundColor(.primary)
+                        Text("Folder Name")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [Color.blue, Color.purple],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
                         
-                        TextField("Enter space name", text: $spaceName)
+                        TextField("Enter folder name", text: $spaceName)
                             .textFieldStyle(.roundedBorder)
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
@@ -71,16 +68,44 @@ struct CreateSpaceView: View {
                                     impact.impactOccurred()
                                 }) {
                                     Image(systemName: icon)
-                                        .font(.title2)
-                                        .foregroundColor(selectedIcon == icon ? .white : .primary)
-                                        .frame(width: 50, height: 50)
+                                        .font(.system(size: 24, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 56, height: 56)
                                         .background(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .fill(selectedIcon == icon ? Color.blue : Color.blue.opacity(0.1))
+                                            RoundedRectangle(cornerRadius: 14)
+                                                .fill(
+                                                    selectedIcon == icon
+                                                        ? LinearGradient(
+                                                            colors: [Color.blue, Color.purple],
+                                                            startPoint: .topLeading,
+                                                            endPoint: .bottomTrailing
+                                                        )
+                                                        : LinearGradient(
+                                                            colors: [
+                                                                Color.gray.opacity(0.2),
+                                                                Color.gray.opacity(0.1)
+                                                            ],
+                                                            startPoint: .topLeading,
+                                                            endPoint: .bottomTrailing
+                                                        )
+                                                )
                                         )
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .strokeBorder(selectedIcon == icon ? Color.blue : Color.clear, lineWidth: 2)
+                                            RoundedRectangle(cornerRadius: 14)
+                                                .strokeBorder(
+                                                    selectedIcon == icon
+                                                        ? Color.white.opacity(0.5)
+                                                        : Color.clear,
+                                                    lineWidth: 2
+                                                )
+                                        )
+                                        .shadow(
+                                            color: selectedIcon == icon
+                                                ? Color.purple.opacity(0.3)
+                                                : .clear,
+                                            radius: 8,
+                                            x: 0,
+                                            y: 4
                                         )
                                 }
                                 .buttonStyle(.plain)
@@ -105,27 +130,32 @@ struct CreateSpaceView: View {
                                     let impact = UIImpactFeedbackGenerator(style: .light)
                                     impact.impactOccurred()
                                 }) {
-                                    Circle()
-                                        .fill(Color(hex: color))
-                                        .frame(width: 50, height: 50)
-                                        .overlay(
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color(hex: color))
+                                            .frame(width: 56, height: 56)
+                                        
+                                        // White drop shadow background
+                                        Circle()
+                                            .fill(Color.white.opacity(0.3))
+                                            .frame(width: 56, height: 56)
+                                            .blur(radius: 8)
+                                            .offset(x: 0, y: 4)
+                                        
+                                        if selectedColor == color {
                                             Circle()
-                                                .strokeBorder(
-                                                    Color.white,
-                                                    lineWidth: selectedColor == color ? 3 : 0
-                                                )
-                                        )
-                                        .overlay(
-                                            Circle()
-                                                .strokeBorder(
-                                                    Color.blue.opacity(0.5),
-                                                    lineWidth: selectedColor == color ? 1 : 0
-                                                )
-                                        )
-                                        .shadow(
-                                            color: selectedColor == color ? Color(hex: color).opacity(0.5) : .clear,
-                                            radius: selectedColor == color ? 8 : 0
-                                        )
+                                                .strokeBorder(Color.white, lineWidth: 3)
+                                                .frame(width: 56, height: 56)
+                                        }
+                                    }
+                                    .shadow(
+                                        color: selectedColor == color
+                                            ? Color(hex: color).opacity(0.5)
+                                            : .clear,
+                                        radius: selectedColor == color ? 12 : 0,
+                                        x: 0,
+                                        y: 6
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }

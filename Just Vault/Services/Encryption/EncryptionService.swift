@@ -14,8 +14,16 @@ class EncryptionService {
     /// Encrypt file data using AES-256-GCM
     /// Format: [IV (12 bytes)][Ciphertext][Tag (16 bytes)]
     func encryptFile(_ data: Data, fileId: String) throws -> Data {
-        // 1. Get master key from Secure Enclave
-        let masterKey = try secureEnclave.getMasterKey()
+        // 1. Get master key from Secure Enclave (create if doesn't exist)
+        let masterKey: SymmetricKey
+        do {
+            masterKey = try secureEnclave.getMasterKey()
+        } catch SecureEnclaveError.keyNotFound {
+            // Generate and store master key on first use
+            let newKey = generateMasterKey()
+            try secureEnclave.storeMasterKey(newKey)
+            masterKey = newKey
+        }
         
         // 2. Derive file-specific key using HKDF
         let fileKey = HKDF<SHA256>.deriveKey(

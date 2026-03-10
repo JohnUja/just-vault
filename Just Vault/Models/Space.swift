@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct Space: Codable, Identifiable {
+struct Space: Codable, Identifiable, Equatable {
     let id: String
     let userId: String
     let name: String
