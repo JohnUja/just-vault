@@ -98,5 +98,17 @@ class LocalFileMetadataService {
         UserDefaults.standard.set(fileIds, forKey: spaceKey)
         UserDefaults.standard.synchronize()
     }
+    
+    /// Update an existing file's metadata while keeping space indexes correct.
+    func updateFileMetadata(_ file: VaultFile, userId: String, oldSpaceId: String? = nil) throws {
+        if let oldSpaceId, oldSpaceId != file.spaceId {
+            let oldSpaceKey = "space_files_\(userId)_\(oldSpaceId)"
+            var oldFileIds = UserDefaults.standard.stringArray(forKey: oldSpaceKey) ?? []
+            oldFileIds.removeAll { $0 == file.id }
+            UserDefaults.standard.set(oldFileIds, forKey: oldSpaceKey)
+        }
+        
+        try saveFileMetadata(file, userId: userId)
+    }
 }
 

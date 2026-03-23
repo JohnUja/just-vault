@@ -30,87 +30,126 @@ enum VaultMode: Equatable {
 
 struct VaultHomeView: View {
     @EnvironmentObject var authService: AuthenticationService
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// iPad’s default `TabView` uses a top/sidebar style; compact size class restores a bottom icon tab bar like iPhone.
+    private var tabViewHorizontalSizeClassOverride: UserInterfaceSizeClass {
+        if UIDevice.current.userInterfaceIdiom == .pad { return .compact }
+        return horizontalSizeClass ?? .compact
+    }
     @StateObject private var viewModel: VaultHomeViewModel
     @State private var showFocusInfo = false
     @State private var selectedTab = 0
     @State private var selectedSpace: Space?
     @State private var showSpaceDetail = false
     @State private var showCreateSpace = false
+    @State private var pendingCreateSpaceOrderIndex: Int?
     @State private var showPaywall = false
     @State private var showAddFileSpaceSelector = false
     @State private var selectedSpaceForFile: Space?
-    @State private var showFilePickerOptions = false
-    @State private var showDocumentPicker = false
-    @State private var showImagePicker = false
-    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var spaceToEdit: Space?
     @State private var showEditSpace = false
     @State private var spaceToDelete: Space?
     @State private var showDeleteConfirmation = false
+    @State private var showMoveFilesToSpace = false
     @State private var showSearch = false
-    
+    @State private var fileToPreviewFromSearch: VaultFile?
+    @State private var fileImportError: String?
+    @AppStorage("hasSeenAddDocumentsOnboarding") private var hasSeenAddDocumentsOnboarding = false
+    @State private var showAddDocumentsOnboarding = false
+
     init() {
         // Initialize with placeholder - will be set in onAppear
         _viewModel = StateObject(wrappedValue: VaultHomeViewModel())
     }
-    
+
+    private var vaultTitle: String {
+        let name = viewModel.user?.name?.trimmingCharacters(in: .whitespaces) ?? ""
+        if name.isEmpty { return "My Vault" }
+        let first = name.components(separatedBy: " ").first ?? name
+        return "\(first)'s Vault"
+    }
+
+    /// Use device idiom so honeycomb stays large on iPad even when we override size class for the tab bar.
+    private var isRegularWidth: Bool { UIDevice.current.userInterfaceIdiom == .pad || horizontalSizeClass == .regular }
+    private var hiveLayoutScale: CGFloat { isRegularWidth ? 1.22 : 1.0 }
+    private var hiveFrameHeight: CGFloat { isRegularWidth ? 540 : 442 }
+    private var hiveSpaceHexSide: CGFloat { isRegularWidth ? 138 : 120 }
+    private var hiveCenterHubSide: CGFloat { isRegularWidth ? 132 : 120 }
+
     var body: some View {
+        Group {
         TabView(selection: $selectedTab) {
             // Home Tab
-            NavigationView {
+            NavigationStack {
                 ZStack {
-                    // Background - royal/wine purple gradient
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.32, green: 0.08, blue: 0.42),   // Wine/royal purple
-                            Color(red: 0.38, green: 0.1, blue: 0.48),
-                            Color(red: 0.28, green: 0.06, blue: 0.38)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .ignoresSafeArea()
+                    AppTheme.backgroundGradient.ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // Header - fixed height so layout doesn't bounce
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let userName = viewModel.user?.name?.components(separatedBy: " ").first {
-                                    Text("Hi, \(userName)")
-                                        .font(.system(size: 18, weight: .semibold))
-                                        .foregroundColor(.white)
-                                }
+                        // Header — single line: "(Name)'s Vault" when name is set, else "My Vault"
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .center) {
                                 HStack(spacing: 8) {
-                                    Text("My Vault")
-                                        .font(.system(size: 20, weight: .bold))
-                                        .foregroundColor(.white)
-                                    if let user = viewModel.user {
-                                        Text(user.isPro ? "Pro" : "Free")
-                                            .font(.system(size: 11, weight: .bold))
+                                    ZStack {
+                                        // White outline (approx) using multi-direction shadows.
+                                        Text(vaultTitle)
+                                            .font(.system(size: 20, weight: .bold))
                                             .foregroundColor(.white)
+                                            .offset(x: -1, y: 0)
+                                        Text(vaultTitle)
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .offset(x: 1, y: 0)
+                                        Text(vaultTitle)
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .offset(x: 0, y: -1)
+                                        Text(vaultTitle)
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .offset(x: 0, y: 1)
+                                        
+                                        Text(vaultTitle)
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(AppTheme.headerTint)
+                                    }
+                                    if let user = viewModel.user {
+                                        let tierColor = PaywallView.tierAccent(user.effectiveTier)
+                                        Text(user.effectiveTier.displayName)
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(tierColor)
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 4)
                                             .background(
                                                 Capsule()
-                                                    .fill(user.isPro ? Color(red: 0.45, green: 0.15, blue: 0.55) : Color.gray.opacity(0.6))
+                                                    .fill(Color.clear)
+                                                    .overlay(
+                                                        Capsule()
+                                                            .stroke(tierColor, lineWidth: 1.5)
+                                                    )
                                             )
                                     }
                                 }
+
+                                Spacer()
+
+                                HStack(spacing: 10) {
+                                    headerShortcutButton(icon: "doc.badge.plus") {
+                                        if selectedSpaceForFile == nil {
+                                            selectedSpaceForFile = viewModel.spaces.first
+                                        }
+                                        showAddFileSpaceSelector = true
+                                    }
+
+                                    headerShortcutButton(icon: "magnifyingglass") {
+                                        showSearch = true
+                                    }
+                                }
                             }
-                            .frame(height: 52)
-                            .padding(.top, 8)
-                            
-                            Spacer()
-                            
-                            Button(action: { showAddFileSpaceSelector = true }) {
-                                Image(systemName: "doc.badge.plus")
-                                    .font(.system(size: 20, weight: .light))
-                                    .foregroundColor(.white)
-                            }
-                            .padding(.top, 8)
                         }
                         .padding(.horizontal, 20)
-                        .padding(.bottom, 12)
+                        .padding(.top, 12)
+                        .padding(.bottom, 10)
                         
                         // Focus Mode Banner
                         if viewModel.vaultMode.isFocusMode, let focusedSpace = viewModel.focusedSpace {
@@ -123,16 +162,7 @@ struct VaultHomeView: View {
                                 }
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
-                        }
-                        
-                        // Storage Meter (only for Pro/Cloud users)
-                        if let user = viewModel.user, user.isPro {
-                            StorageMeterView(
-                                usedMB: user.cloudStorageUsedMB,
-                                quotaMB: user.cloudStorageQuotaMB,
-                                isPro: true
-                            )
-                            .padding(.horizontal)
+                            .fixedSize(horizontal: false, vertical: true)
                         }
                         
                         // Hexagon Hive View
@@ -140,16 +170,18 @@ struct VaultHomeView: View {
                             allSpaces: viewModel.spaces,
                             vaultMode: $viewModel.vaultMode,
                             isPro: viewModel.user?.isPro ?? false,
-                            syncStatus: viewModel.syncStatus,
+                            allowsAdditionalPages: viewModel.user?.effectiveTier == .proPlus,
+                            syncStatus: effectiveCenterSyncStatus(viewModel: viewModel),
+                            hiveLayoutScale: hiveLayoutScale,
+                            spaceHexSide: hiveSpaceHexSide,
+                            centerHubHexSide: hiveCenterHubSide,
                             onSpaceTap: { space in
                                 // Regular tap: always open space (preview/thumbnails)
                                 selectedSpace = space
                                 showSpaceDetail = true
                             },
-                            onSpaceLongPress: { space in
-                                // Long press: shortcut to add file to this space
-                                selectedSpaceForFile = space
-                                showFilePickerOptions = true
+                            onSpaceLongPress: { _ in
+                                // Long press is reserved for the context menu only.
                             },
                             onSpaceEdit: { space in
                                 spaceToEdit = space
@@ -165,20 +197,27 @@ struct VaultHomeView: View {
                                 spaceToDelete = space
                                 showDeleteConfirmation = true
                             },
-                            onGhostTap: {
-                                // Ghost slots disabled - only 6 pre-defined spaces
-                                // User can still add files to existing spaces
+                            onGhostTap: { orderIndex in
+                                if orderIndex < 6,
+                                   let userId = viewModel.user?.id,
+                                   let missing = DefaultSpacesService.shared.nextMissingDefault(
+                                    existingSpaces: viewModel.spaces, userId: userId
+                                   ) {
+                                    viewModel.createSpaceFromDefault(missing)
+                                } else {
+                                    pendingCreateSpaceOrderIndex = orderIndex
+                                    showCreateSpace = true
+                                }
                             },
                             onLockAll: {
-                                viewModel.lockVault()
+                                viewModel.toggleVaultLockState()
                             },
                             onSyncNow: {
-                                Task {
-                                    await SyncService.shared.processSyncQueue()
-                                }
-                            }
+                                viewModel.startSyncFromUI()
+                            },
+                            showSearch: $showSearch
                         )
-                        .frame(height: UIScreen.main.bounds.height - 500) // Reduced height to make room for file preview
+                        .frame(height: hiveFrameHeight)
                         
                         // Recent Files Preview (like JustScan)
                         if !viewModel.recentFiles.isEmpty {
@@ -186,13 +225,13 @@ struct VaultHomeView: View {
                                 HStack {
                                     Text("Recent Files")
                                         .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.white)
+                                        .foregroundColor(AppTheme.headerTint)
                                     Spacer()
                                     Button("See All") {
                                         selectedTab = 1 // Switch to Files tab
                                     }
                                     .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(AppTheme.accent)
                                 }
                                 .padding(.horizontal, 20)
                                 
@@ -205,25 +244,33 @@ struct VaultHomeView: View {
                                     .padding(.horizontal, 20)
                                 }
                             }
-                            .padding(.vertical, 16)
+                            .padding(.top, 8)
+                            .padding(.bottom, 10)
+                            .frame(minHeight: 0)
                         }
+
+                        Spacer(minLength: viewModel.recentFiles.isEmpty ? 34 : 18)
                         
                         // Cloud Backup Bar (persistent at bottom)
                         CloudBackupBar(
-                            isPro: viewModel.user?.isPro ?? false,
+                            tier: viewModel.user?.effectiveTier ?? .free,
                             usedMB: viewModel.user?.cloudStorageUsedMB ?? 0,
-                            quotaMB: viewModel.user?.cloudStorageQuotaMB ?? 250,
+                            quotaMB: viewModel.user?.effectiveCloudStorageQuotaMB ?? 0,
+                            backupEnabled: AppPreferences.cloudBackupEnabled,
+                            isSyncing: viewModel.isSyncingInProgress,
+                            hasPendingSync: viewModel.hasPendingSync,
                             onBackup: {
-                                if viewModel.user?.isPro ?? false {
-                                    Task {
-                                        await SyncService.shared.processSyncQueue()
+                                if (viewModel.user?.hasCloudBackup ?? false) {
+                                    if !AppPreferences.cloudBackupEnabled {
+                                        AppPreferences.cloudBackupEnabled = true
                                     }
+                                    viewModel.startSyncFromUI()
                                 } else {
                                     showPaywall = true
                                 }
                             }
                         )
-                        .padding(.bottom, 10)
+                        .padding(.bottom, 24)
                     }
                 }
                 .sheet(isPresented: $showFocusInfo) {
@@ -231,12 +278,20 @@ struct VaultHomeView: View {
                 }
                 .popover(isPresented: $showCreateSpace) {
                     CreateSpacePopupView(onCreate: { name, icon, color in
-                        viewModel.createSpace(name: name, icon: icon, color: color)
+                        viewModel.createSpace(
+                            name: name,
+                            icon: icon,
+                            color: color,
+                            orderIndex: pendingCreateSpaceOrderIndex
+                        )
+                        pendingCreateSpaceOrderIndex = nil
                         showCreateSpace = false
                     })
                 }
-                .sheet(item: $selectedSpace) { space in
-                    SpaceDetailView(space: space)
+                .navigationDestination(isPresented: $showSpaceDetail) {
+                    if let space = selectedSpace {
+                        SpaceDetailView(space: space, allSpaces: viewModel.spaces)
+                    }
                 }
                 .alert("Space Limit Reached", isPresented: $viewModel.showUpgradePrompt) {
                     Button("Upgrade to Pro") {
@@ -246,12 +301,42 @@ struct VaultHomeView: View {
                 } message: {
                     Text("Free tier allows \(AppConfig.freeTierMaxSpaces) spaces. Upgrade to Pro for \(AppConfig.proTierMaxSpaces) spaces.")
                 }
-                .sheet(isPresented: $showPaywall) {
+                .alert("File Too Large", isPresented: Binding(
+                    get: { fileImportError != nil },
+                    set: { if !$0 { fileImportError = nil } }
+                )) {
+                    Button("OK") { fileImportError = nil }
+                    if viewModel.user?.effectiveTier != .proPlus {
+                        Button("Upgrade") {
+                            fileImportError = nil
+                            showPaywall = true
+                        }
+                    }
+                } message: {
+                    Text(fileImportError ?? "")
+                }
+                .fullScreenCover(isPresented: $showPaywall) {
                     PaywallView()
+                        .environmentObject(authService)
                 }
                 .sheet(isPresented: $showSearch) {
-                    SearchView(spaces: viewModel.spaces)
-                        .environmentObject(authService)
+                    SearchView(
+                        spaces: viewModel.spaces,
+                        onOpenSpace: { space in
+                            showSearch = false
+                            selectedSpace = space
+                            showSpaceDetail = true
+                        },
+                        onOpenFile: { file in
+                            showSearch = false
+                            fileToPreviewFromSearch = file
+                        }
+                    )
+                    .environmentObject(authService)
+                    .presentationBackground(AppTheme.backgroundGradient)
+                }
+                .sheet(item: $fileToPreviewFromSearch) { file in
+                    FilePreviewView(file: file)
                 }
                 .sheet(item: $spaceToEdit) { space in
                     EditSpaceView(space: space) { name, icon, color in
@@ -259,112 +344,122 @@ struct VaultHomeView: View {
                         spaceToEdit = nil
                     }
                 }
-                .alert("Delete Space", isPresented: $showDeleteConfirmation) {
-                    Button("Delete", role: .destructive) {
+                .confirmationDialog(
+                    spaceToDelete?.fileCount == 0 ? "Delete \"\(spaceToDelete?.name ?? "")\"?" : "Delete \(spaceToDelete?.name ?? "Space")?",
+                    isPresented: $showDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    if let space = spaceToDelete, space.fileCount > 0, viewModel.spaces.count > 1 {
+                        Button("Move files to another space first") {
+                            showDeleteConfirmation = false
+                            showMoveFilesToSpace = true
+                        }
+                    }
+                    Button(spaceToDelete?.fileCount == 0 ? "Delete" : "Delete space and all files", role: .destructive) {
                         if let space = spaceToDelete {
                             Task {
                                 do {
-                                    // Require Face ID before deletion
                                     let context = LAContext()
-                                    var error: NSError?
-                                    
-                                    if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
-                                        let success = try await context.evaluatePolicy(
-                                            .deviceOwnerAuthenticationWithBiometrics,
-                                            localizedReason: "Confirm deletion of space"
-                                        )
-                                        
-                                        if success {
-                                            try await viewModel.deleteSpace(space)
+                                    var authError: NSError?
+                                    let policy: LAPolicy = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError)
+                                        ? .deviceOwnerAuthenticationWithBiometrics
+                                        : .deviceOwnerAuthentication
+                                    let ok = try await context.evaluatePolicy(policy, localizedReason: "Confirm deletion")
+                                    if ok { try await viewModel.deleteSpace(space) }
+                                } catch {
+                                    print("Delete cancelled: \(error.localizedDescription)")
+                                }
+                                spaceToDelete = nil
+                            }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { spaceToDelete = nil }
+                } message: {
+                    Text(spaceToDelete?.fileCount == 0
+                         ? "This space is empty. It will be removed."
+                         : "All files inside this space will be permanently deleted, including any cloud backups. This cannot be undone.")
+                }
+                .sheet(isPresented: $showMoveFilesToSpace) {
+                    if let source = spaceToDelete {
+                        MoveFilesToSpaceView(
+                            sourceSpace: source,
+                            otherSpaces: viewModel.spaces.filter { $0.id != source.id },
+                            onSelect: { target in
+                                Task {
+                                    do {
+                                        try await viewModel.moveAllFiles(from: source, to: target)
+                                        try await viewModel.deleteSpace(source)
+                                        await MainActor.run {
+                                            showMoveFilesToSpace = false
                                             spaceToDelete = nil
                                         }
-                                    } else {
-                                        // Fallback to device passcode
-                                        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
-                                            let success = try await context.evaluatePolicy(
-                                                .deviceOwnerAuthentication,
-                                                localizedReason: "Confirm deletion of space"
-                                            )
-                                            
-                                            if success {
-                                                try await viewModel.deleteSpace(space)
-                                                spaceToDelete = nil
-                                            }
-                                        }
+                                    } catch {
+                                        print("Move/delete failed: \(error.localizedDescription)")
                                     }
-                                } catch {
-                                    print("Failed to delete space: \(error.localizedDescription)")
                                 }
+                            },
+                            onCancel: {
+                                showMoveFilesToSpace = false
                             }
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {
-                        spaceToDelete = nil
-                    }
-                } message: {
-                    if let space = spaceToDelete {
-                        Text("Are you sure you want to delete '\(space.name)'? This action cannot be undone.")
+                        )
                     }
                 }
-                .sheet(isPresented: $showAddFileSpaceSelector) {
+                .overlay {
+                    // IMPORTANT: keep a single overlay modifier to avoid SwiftUI
+                    // intermediate rendering states (which can look like “stuck/black” UI).
+                    if showAddDocumentsOnboarding {
+                        standalonePopUpOverlay(onDismiss: {
+                            showAddDocumentsOnboarding = false
+                            hasSeenAddDocumentsOnboarding = true
+                        }, content: {
+                            AddImportantDocumentsSheet(
+                                spaces: viewModel.spaces,
+                                allowedContentTypes: (viewModel.user?.effectiveTier ?? .free).allowedContentTypes,
+                                onImport: { url, space in
+                                    await importFileToSpace(url: url, space: space)
+                                },
+                                onDismiss: {
+                                    showAddDocumentsOnboarding = false
+                                    hasSeenAddDocumentsOnboarding = true
+                                }
+                            )
+                        })
+                    }
+                }
+                .fullScreenCover(isPresented: $showAddFileSpaceSelector) {
                     AddFileSpaceSelectorView(
                         spaces: viewModel.spaces,
+                        allowedContentTypes: (viewModel.user?.effectiveTier ?? .free).allowedContentTypes,
+                        selectedSpace: selectedSpaceForFile,
                         onSpaceSelected: { space in
                             selectedSpaceForFile = space
+                        },
+                        onOpenSpace: { space in
+                            selectedSpace = space
+                            showSpaceDetail = true
                             showAddFileSpaceSelector = false
-                            // Auto-trigger file picker after space selection
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                showFilePickerOptions = true
+                        },
+                        onDocumentPicked: { url, space in
+                            Task {
+                                await importFileToSpace(url: url, space: space)
                             }
-                        }
+                        },
+                        onImagePicked: { image, sourceType, space in
+                            Task {
+                                if let imageData = image.jpegData(compressionQuality: 0.8) {
+                                    let formatter = DateFormatter()
+                                    formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+                                    let prefix = sourceType == .camera ? "Camera" : "Photo"
+                                    let fileName = "\(prefix) \(formatter.string(from: Date())).jpg"
+                                    let tempURL = FileManager.default.temporaryDirectory
+                                        .appendingPathComponent(fileName)
+                                    try? imageData.write(to: tempURL)
+                                    await importFileToSpace(url: tempURL, space: space)
+                                }
+                            }
+                        },
+                        onRequestDismiss: { showAddFileSpaceSelector = false }
                     )
-                }
-                .confirmationDialog(
-                    "Add File to \(selectedSpaceForFile?.name ?? "Space")",
-                    isPresented: $showFilePickerOptions,
-                    titleVisibility: .visible
-                ) {
-                    Button("Files") {
-                        showDocumentPicker = true
-                    }
-                    Button("Photos") {
-                        imagePickerSource = .photoLibrary
-                        showImagePicker = true
-                    }
-                    Button("Camera") {
-                        imagePickerSource = .camera
-                        showImagePicker = true
-                    }
-                    Button("Cancel", role: .cancel) {}
-                }
-                .sheet(isPresented: $showDocumentPicker) {
-                    if let space = selectedSpaceForFile {
-                        DocumentPicker(
-                            allowedContentTypes: [.pdf, .jpeg, .png, .heic],
-                            onDocumentPicked: { url in
-                                Task {
-                                    await importFileToSpace(url: url, space: space)
-                                }
-                            }
-                        )
-                    }
-                }
-                .sheet(isPresented: $showImagePicker) {
-                    if let space = selectedSpaceForFile {
-                        ImagePicker(
-                            sourceType: imagePickerSource,
-                            onImagePicked: { image in
-                                Task {
-                                    if let imageData = image.jpegData(compressionQuality: 0.8) {
-                                        let tempURL = FileManager.default.temporaryDirectory
-                                            .appendingPathComponent("\(UUID().uuidString).jpg")
-                                        try? imageData.write(to: tempURL)
-                                        await importFileToSpace(url: tempURL, space: space)
-                                    }
-                                }
-                            }
-                        )
-                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
                     // Save all data before app goes to background
@@ -383,6 +478,16 @@ struct VaultHomeView: View {
                         // Load spaces after user is loaded
                         viewModel.refreshSpaces()
                         await viewModel.loadRecentFiles()
+                        
+                        // Show “add important documents” onboarding once, ~3s after spaces are loaded
+                        if !hasSeenAddDocumentsOnboarding {
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            await MainActor.run {
+                                if !hasSeenAddDocumentsOnboarding {
+                                    showAddDocumentsOnboarding = true
+                                }
+                            }
+                        }
                     }
                 }
                 .onChange(of: viewModel.user) { oldUser, newUser in
@@ -391,6 +496,16 @@ struct VaultHomeView: View {
                             await viewModel.loadRecentFiles()
                         }
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .userProfileDidChange)) { _ in
+                    Task {
+                        await viewModel.loadUser()
+                        await viewModel.loadRecentFiles()
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showAddDocumentsOnboardingAgain)) { _ in
+                    hasSeenAddDocumentsOnboarding = false
+                    showAddDocumentsOnboarding = true
                 }
             }
             .tabItem {
@@ -412,15 +527,48 @@ struct VaultHomeView: View {
                 }
                 .tag(2)
         }
-        .tint(.white)
+        .tint(AppTheme.accent)
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab == 0 {
+                showSpaceDetail = false
+                selectedSpace = nil
+            }
+        }
+        }
+        .environment(\.horizontalSizeClass, tabViewHorizontalSizeClassOverride)
     }
     
+    /// When automatic cloud backup is off, don't show "syncing" or "pending" in the center hub.
+    private func effectiveCenterSyncStatus(viewModel: VaultHomeViewModel) -> SyncStatus {
+        let raw = viewModel.isSyncingInProgress ? SyncStatus.syncing : viewModel.syncStatus
+        if !AppPreferences.cloudBackupEnabled && (raw == .pending || raw == .syncing) {
+            return .localOnly
+        }
+        return raw
+    }
+
     // MARK: - File Import Helper
-    
+
     private func importFileToSpace(url: URL, space: Space) async {
         let vm = viewModel
-        
+        let tier = vm.user?.effectiveTier ?? .free
+
         do {
+            let ext = url.pathExtension.lowercased()
+            let videoExts = ["mov", "mp4", "m4v", "avi", "mkv", "wmv", "webm"]
+            if videoExts.contains(ext) {
+                print("File rejected: video formats are not supported in this version")
+                return
+            }
+
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            let fileSize = (attrs[.size] as? Int64) ?? 0
+            if fileSize > tier.maxFileSizeBytes {
+                let message = "File exceeds \(tier.maxFileSizeMB) MB limit for \(tier.displayName). \(tier == .free ? "Upgrade to Pro for 100 MB per file." : tier == .pro ? "Upgrade to Pro+ for 500 MB per file." : "")"
+                await MainActor.run { fileImportError = message }
+                return
+            }
+
             let vaultFile = try await FileImportService.shared.importFile(
                 url: url,
                 spaceId: space.id,
@@ -435,8 +583,10 @@ struct VaultHomeView: View {
             }
             
             if hasCloudBackup {
-                try? await DynamoDBService.shared.saveFileMetadata(vaultFile)
-                SyncService.shared.queueFileForSync(vaultFile)
+                if AppPreferences.cloudBackupEnabled {
+                    try? await DynamoDBService.shared.saveFileMetadata(vaultFile)
+                    SyncService.shared.queueFileForSync(vaultFile)
+                }
             }
             
             await MainActor.run {
@@ -447,6 +597,47 @@ struct VaultHomeView: View {
         } catch {
             print("Failed to import file: \(error.localizedDescription)")
         }
+    }
+}
+
+private extension VaultHomeView {
+    /// Standalone centered pop-up (not a bottom sheet): dimmed background + card in the middle.
+    @ViewBuilder
+    func standalonePopUpOverlay<Content: View>(
+        onDismiss: @escaping () -> Void,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture { onDismiss() }
+                content()
+                    .frame(maxWidth: 340, maxHeight: min(480, geo.size.height * 0.72))
+                    .background(AppTheme.backgroundGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .shadow(color: .black.opacity(0.28), radius: 24, x: 0, y: 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    func headerShortcutButton(icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(AppTheme.headerTint)
+                .frame(width: 34, height: 34)
+                .background(
+                    Circle()
+                        .fill(.white)
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.outline, lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -481,7 +672,7 @@ struct StorageMeterView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.gray.opacity(0.15))
+                        .fill(AppTheme.cardOutline)
                         .frame(height: 10)
                     
                     RoundedRectangle(cornerRadius: 6)
@@ -518,7 +709,7 @@ struct FocusModeBanner: View {
     var body: some View {
         HStack {
             Image(systemName: "target")
-                .foregroundColor(.blue)
+                .foregroundColor(AppTheme.accent)
             Text("Focusing on: \(spaceName)")
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -550,11 +741,11 @@ struct FocusModeInfoSheet: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
                 Image(systemName: "target")
                     .font(.system(size: 60))
-                    .foregroundColor(.blue)
+                    .foregroundColor(AppTheme.accent)
                     .frame(maxWidth: .infinity)
                     .padding(.top)
                 
@@ -613,7 +804,7 @@ struct InfoRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundColor(.blue)
+                .foregroundColor(AppTheme.accent)
                 .frame(width: 30)
             
             VStack(alignment: .leading, spacing: 4) {
@@ -807,7 +998,7 @@ struct SpacesFlowerView: View {
                 path.addLine(to: position)
             }
             .stroke(
-                Color.gray.opacity(0.3),
+                AppTheme.secondaryText.opacity(0.5),
                 style: StrokeStyle(lineWidth: layout.stemWidth, lineCap: .round, dash: [5, 5])
             )
             
@@ -910,16 +1101,16 @@ struct VaultCoreView: View {
         if let focusedSpace = focusedSpace {
             Image(systemName: focusedSpace.icon)
                 .font(.system(size: 28))
-                .foregroundColor(.white)
+                .foregroundColor(AppTheme.headerTint)
             Text(focusedSpace.name)
                 .font(.caption2)
                 .fontWeight(.bold)
-                .foregroundColor(.white)
+                .foregroundColor(AppTheme.headerTint)
                 .lineLimit(1)
         } else {
             Image(systemName: iconForMode(vaultMode))
                 .font(.system(size: 28))
-                .foregroundColor(.white)
+                .foregroundColor(AppTheme.headerTint)
         }
     }
     
@@ -994,25 +1185,25 @@ struct VaultCoreView: View {
         switch mode {
         case .browse:
             return LinearGradient(
-                colors: [Color.purple.opacity(0.8), Color.blue.opacity(0.8)],
+                colors: [AppTheme.accent, AppTheme.accentSecondary],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         case .organize:
             return LinearGradient(
-                colors: [Color.orange.opacity(0.8), Color.pink.opacity(0.8)],
+                colors: [AppTheme.gold, AppTheme.gold],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         case .focus:
             return LinearGradient(
-                colors: [Color.yellow.opacity(0.9), Color.orange.opacity(0.9)],
+                colors: [AppTheme.goldLight, AppTheme.gold],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         case .locked:
             return LinearGradient(
-                colors: [Color.gray.opacity(0.5), Color.gray.opacity(0.5)],
+                colors: [AppTheme.secondaryText, AppTheme.secondaryText],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -1040,13 +1231,15 @@ struct VaultCoreView: View {
     private var syncStatusColor: Color {
         switch syncStatus {
         case .synced:
-            return .green
+            return AppTheme.success
         case .syncing:
-            return .blue
+            return AppTheme.accent
         case .pending:
-            return .orange
+            return AppTheme.warning
         case .error:
-            return .red
+            return AppTheme.error
+        case .localOnly:
+            return AppTheme.secondaryText
         }
     }
 }
@@ -1092,7 +1285,7 @@ struct AddSpacePetalView: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.gray.opacity(0.1))
+                .fill(AppTheme.outline)
                 .overlay(
                     Circle()
                         .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [6, 3]))
@@ -1235,7 +1428,7 @@ struct SpaceBubbleView: View {
                     
                     Text(space.name)
                         .font(.system(size: radius * 0.16, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white)
+                        .foregroundColor(AppTheme.headerTint)
                         .lineLimit(1)
                         .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
                     
@@ -1243,7 +1436,7 @@ struct SpaceBubbleView: View {
                     if space.fileCount > 0 {
                         Text("\(space.fileCount)")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(AppTheme.headerTint)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(
@@ -1417,6 +1610,9 @@ class VaultHomeViewModel: ObservableObject {
     @Published var showUpgradePrompt = false
     @Published var showPaywall = false
     @Published var recentFiles: [VaultFile] = []
+    @Published var isSyncingInProgress = false
+    /// True when there are local files with .pending or .error that can be synced (for cloud bar "Sync Now" vs "Up to date").
+    @Published var hasPendingSync = false
     
     private let localStorage = LocalStorageService()
     private var focusModeTimer: Timer?
@@ -1441,6 +1637,7 @@ class VaultHomeViewModel: ObservableObject {
         // Try to load from AuthenticationService first
         if let loadedUser = await authService?.loadCurrentUser() {
             user = loadedUser
+            await MainActor.run { authService?.currentUser = loadedUser }
             await loadRecentFiles()
             return
         }
@@ -1467,42 +1664,82 @@ class VaultHomeViewModel: ObservableObject {
         )
     }
     
+    /// Recent files are always from local storage (last opened / uploaded). Cloud is never required to show them.
     func loadRecentFiles() async {
         guard let userId = user?.id else {
-            recentFiles = []
+            await MainActor.run { recentFiles = [] }
             return
         }
         
+        // Always load from local first — recent files must work without AWS (e.g. expired credentials).
+        var allFiles: [VaultFile] = []
         do {
-            // Load files from local storage (works for all users)
-            let localFiles = try LocalFileMetadataService.shared.loadAllFiles(userId: userId)
-            
-            // If user has cloud backup, also load from DynamoDB
-            var allFiles = localFiles
-            if let user = user, user.hasCloudBackup {
-                let cloudFiles = try await DynamoDBService.shared.loadAllFiles(userId: userId)
-                // Merge, avoiding duplicates
-                let localIds = Set(localFiles.map { $0.id })
-                let newFiles = cloudFiles.filter { !localIds.contains($0.id) }
-                allFiles.append(contentsOf: newFiles)
-            }
-            
-            // Sort by most recent and take first 6
-            let sorted = allFiles.sorted { $0.createdAt > $1.createdAt }
-            await MainActor.run {
-                recentFiles = Array(sorted.prefix(6))
-            }
+            allFiles = try LocalFileMetadataService.shared.loadAllFiles(userId: userId)
         } catch {
-            print("Failed to load recent files: \(error.localizedDescription)")
-            await MainActor.run {
-                recentFiles = []
+            print("Failed to load local files for recent: \(error.localizedDescription)")
+            await MainActor.run { recentFiles = [] }
+            return
+        }
+        
+        // Optionally merge with DynamoDB for sync status; never let AWS failure clear recent files.
+        if let user = user, user.hasCloudBackup {
+            do {
+                let cloudFiles = try await DynamoDBService.shared.loadAllFiles(userId: userId)
+                var mergedById = Dictionary(uniqueKeysWithValues: allFiles.map { ($0.id, $0) })
+                for file in cloudFiles {
+                    mergedById[file.id] = file
+                    try? LocalFileMetadataService.shared.saveFileMetadata(file, userId: userId)
+                }
+                allFiles = Array(mergedById.values)
+            } catch {
+                // AWS failed (e.g. credentials expired) — keep local list; don't clear recent files
+                if !error.localizedDescription.contains("Cloud sync is only available") {
+                    print("Failed to load cloud files for recent (using local only): \(error.localizedDescription)")
+                }
             }
+        }
+        
+        let sorted = allFiles.sorted {
+            let lhsDate = $0.lastOpenedAt ?? $0.createdAt
+            let rhsDate = $1.lastOpenedAt ?? $1.createdAt
+            return lhsDate > rhsDate
+        }
+        await MainActor.run {
+            recentFiles = Array(sorted.prefix(6))
         }
     }
     
+    /// Called when user taps Sync Now. Marks pending files as .syncing (orange), runs sync, then refreshes.
+    func startSyncFromUI() {
+        guard user?.hasCloudBackup == true, let userId = user?.id else { return }
+        isSyncingInProgress = true
+        Task {
+            do {
+                let localFiles = try LocalFileMetadataService.shared.loadAllFiles(userId: userId)
+                let pending = localFiles.filter { $0.syncStatus == .pending || $0.syncStatus == .error }
+                await SyncService.shared.addFilesToQueueOnly(pending)
+                for var file in pending {
+                    file.syncStatus = .syncing
+                    try? LocalFileMetadataService.shared.updateFileMetadata(file, userId: userId)
+                }
+                if !pending.isEmpty {
+                    NotificationCenter.default.post(name: .vaultFilesDidChange, object: nil)
+                }
+            } catch {
+                print("Failed to queue sync: \(error.localizedDescription)")
+            }
+            await SyncService.shared.processSyncQueue(force: true)
+            await loadSpacesAsync()
+            await calculateStatsAsync()
+            await loadRecentFiles()
+            await MainActor.run { isSyncingInProgress = false }
+        }
+    }
+
     func refreshSpaces() {
         Task {
             await loadSpacesAsync()
+            await calculateStatsAsync()
         }
     }
     
@@ -1513,79 +1750,51 @@ class VaultHomeViewModel: ObservableObject {
     }
     
     private func loadSpacesAsync() async {
-        // Use placeholder if user not loaded yet (for first launch)
-        var userId = user?.id ?? "placeholder"
-        
-        // First, load from UserDefaults (fast, offline)
-        var localSpaces = loadSpacesFromLocalStorage(userId: userId)
-        
-        // If no spaces exist, create default spaces (first launch)
+        guard let userId = user?.id, userId != "placeholder" else {
+            await MainActor.run { spaces = [] }
+            return
+        }
+
+        let hasCloudBackup = user?.hasCloudBackup ?? false
+        var localSpaces = normalizedSpaces(loadSpacesFromLocalStorage(userId: userId))
+
         if DefaultSpacesService.shared.shouldCreateDefaults(existingSpaces: localSpaces) {
-            let defaultSpaces = DefaultSpacesService.shared.createDefaultSpaces(userId: userId)
-            localSpaces = defaultSpaces
-            
-            // Save defaults immediately
-            saveSpacesToLocalStorage(spaces: defaultSpaces, userId: userId)
-            UserDefaults.standard.synchronize()
-            
-            // Save to DynamoDB if user has cloud backup
-            if let user = user, user.hasCloudBackup {
-                for space in defaultSpaces {
-                    try? await DynamoDBService.shared.saveSpace(space)
+            if hasCloudBackup, let cloudSpaces = try? await DynamoDBService.shared.loadSpaces(userId: userId), !cloudSpaces.isEmpty {
+                localSpaces = normalizedSpaces(cloudSpaces)
+                saveSpacesToLocalStorage(spaces: localSpaces, userId: userId)
+            } else {
+                let defaultSpaces = DefaultSpacesService.shared.createDefaultSpaces(userId: userId)
+                localSpaces = normalizedSpaces(defaultSpaces)
+                saveSpacesToLocalStorage(spaces: localSpaces, userId: userId)
+
+                if hasCloudBackup {
+                    for space in localSpaces {
+                        try? await DynamoDBService.shared.saveSpace(space)
+                    }
                 }
             }
         }
-        
-        // Set local spaces immediately for fast UI update
+
         await MainActor.run {
             spaces = localSpaces
         }
-        
-        // If user was placeholder but now loaded, reload with real user ID
-        if userId == "placeholder", let realUserId = user?.id, realUserId != "placeholder" {
-            // Reload with real user ID
-            userId = realUserId
-            localSpaces = loadSpacesFromLocalStorage(userId: userId)
-            
-            // If still no spaces, create defaults with real user ID
-            if DefaultSpacesService.shared.shouldCreateDefaults(existingSpaces: localSpaces) {
-                let defaultSpaces = DefaultSpacesService.shared.createDefaultSpaces(userId: userId)
-                localSpaces = defaultSpaces
-                saveSpacesToLocalStorage(spaces: defaultSpaces, userId: userId)
-            }
-            
-            await MainActor.run {
-                spaces = localSpaces
-            }
-        }
-        
-        // Then, sync from DynamoDB in background
+
+        guard hasCloudBackup else { return }
+
         do {
             let dynamoDBSpaces = try await DynamoDBService.shared.loadSpaces(userId: userId)
-            
-            // Merge results (DynamoDB wins on conflict)
-            var mergedSpaces = localSpaces
-            for dynamoDBSpace in dynamoDBSpaces {
-                if let index = mergedSpaces.firstIndex(where: { $0.id == dynamoDBSpace.id }) {
-                    mergedSpaces[index] = dynamoDBSpace
-                } else {
-                    mergedSpaces.append(dynamoDBSpace)
-                }
-            }
-            
-            // Sort by orderIndex
-            mergedSpaces.sort { $0.orderIndex < $1.orderIndex }
-            
-            // Update UI
+            let mergedSpaces = normalizedSpaces(localSpaces + dynamoDBSpaces)
+
             await MainActor.run {
                 spaces = mergedSpaces
             }
-            
-            // Update local cache
+
             saveSpacesToLocalStorage(spaces: mergedSpaces, userId: userId)
         } catch {
-            print("Failed to load spaces from DynamoDB: \(error.localizedDescription)")
-            // Keep local spaces if DynamoDB fails
+            let msg = error.localizedDescription
+            if !msg.contains("Cloud sync is only available") {
+                print("Failed to load spaces from DynamoDB: \(msg)")
+            }
         }
     }
     
@@ -1600,10 +1809,29 @@ class VaultHomeViewModel: ObservableObject {
     
     private func saveSpacesToLocalStorage(spaces: [Space], userId: String) {
         let key = "spaces_\(userId)"
-        if let data = try? JSONEncoder().encode(spaces) {
+        let normalized = normalizedSpaces(spaces)
+        if let data = try? JSONEncoder().encode(normalized) {
             UserDefaults.standard.set(data, forKey: key)
             UserDefaults.standard.synchronize()
         }
+    }
+
+    private func normalizedSpaces(_ input: [Space]) -> [Space] {
+        var bestByOrderIndex: [Int: Space] = [:]
+
+        for space in input {
+            guard let existing = bestByOrderIndex[space.orderIndex] else {
+                bestByOrderIndex[space.orderIndex] = space
+                continue
+            }
+
+            if space.fileCount > existing.fileCount ||
+                (space.fileCount == existing.fileCount && space.createdAt < existing.createdAt) {
+                bestByOrderIndex[space.orderIndex] = space
+            }
+        }
+
+        return bestByOrderIndex.values.sorted { $0.orderIndex < $1.orderIndex }
     }
     
     func calculateStats() {
@@ -1622,25 +1850,11 @@ class VaultHomeViewModel: ObservableObject {
             return
         }
         
-        // Only load from DynamoDB if user has cloud backup
-        guard let user = user, user.hasCloudBackup else {
-            // Free user - calculate stats from local files only
-            // TODO: Implement local file counting for free users
-            await MainActor.run {
-                totalFileCount = spaces.reduce(0) { $0 + $1.fileCount }
-                spaceCount = spaces.count
-                syncStatus = .synced
-            }
-            return
-        }
-        
+        // Count local files for all users
         do {
-            let allFiles = try await DynamoDBService.shared.loadAllFiles(userId: userId)
-            
-            // Group files by spaceId
-            let filesBySpace = Dictionary(grouping: allFiles) { $0.spaceId }
-            
-            // Update space file counts
+            let localFiles = try LocalFileMetadataService.shared.loadAllFiles(userId: userId)
+            let filesBySpace = Dictionary(grouping: localFiles) { $0.spaceId }
+
             var updatedSpaces = spaces
             for (index, space) in updatedSpaces.enumerated() {
                 updatedSpaces[index] = Space(
@@ -1655,11 +1869,37 @@ class VaultHomeViewModel: ObservableObject {
                     fileCount: filesBySpace[space.id]?.count ?? 0
                 )
             }
-            
-            // Calculate sync status
-            let hasPending = allFiles.contains { $0.syncStatus == .pending }
-            let hasSyncing = allFiles.contains { $0.syncStatus == .syncing }
-            let hasError = allFiles.contains { $0.syncStatus == .error }
+            await MainActor.run {
+                spaces = updatedSpaces
+                totalFileCount = localFiles.count
+                spaceCount = updatedSpaces.count
+            }
+            saveSpacesToLocalStorage(spaces: updatedSpaces, userId: userId)
+        } catch {
+            print("Failed to count local files: \(error.localizedDescription)")
+        }
+
+        // For cloud users: compute sync status from LOCAL files (so pending/syncing reflects reality).
+        // We already have spaces and totalFileCount from local files above; do not overwrite with DynamoDB.
+        guard let user = user, user.hasCloudBackup else {
+            await MainActor.run {
+                syncStatus = .synced
+                hasPendingSync = false
+            }
+            return
+        }
+        
+        do {
+            let localFiles = try LocalFileMetadataService.shared.loadAllFiles(userId: userId)
+            let hasPending = localFiles.contains { $0.syncStatus == .pending }
+            let hasSyncing = localFiles.contains { $0.syncStatus == .syncing }
+            let hasError = localFiles.contains { $0.syncStatus == .error }
+            let hasCloudEligible = localFiles.contains { f in
+                switch f.syncStatus {
+                case .synced, .syncing, .pending, .error: return true
+                case .localOnly: return false
+                }
+            }
             
             let newSyncStatus: SyncStatus
             if hasError {
@@ -1668,22 +1908,21 @@ class VaultHomeViewModel: ObservableObject {
                 newSyncStatus = .syncing
             } else if hasPending {
                 newSyncStatus = .pending
+            } else if !hasCloudEligible {
+                newSyncStatus = .localOnly
             } else {
                 newSyncStatus = .synced
             }
             
             await MainActor.run {
-                spaces = updatedSpaces
-                totalFileCount = allFiles.count
-                spaceCount = spaces.count
                 syncStatus = newSyncStatus
+                hasPendingSync = hasPending || hasError
             }
         } catch {
             print("Failed to calculate stats: \(error.localizedDescription)")
             await MainActor.run {
-                totalFileCount = spaces.reduce(0) { $0 + $1.fileCount }
-                spaceCount = spaces.count
                 syncStatus = .synced
+                hasPendingSync = false
             }
         }
     }
@@ -1738,42 +1977,32 @@ class VaultHomeViewModel: ObservableObject {
     }
     
     func lockVault() {
-        // Lock all spaces
-        guard let userId = user?.id else { return }
-        
-        var updatedSpaces = spaces
-        for (index, space) in updatedSpaces.enumerated() {
-            updatedSpaces[index] = Space(
-                id: space.id,
-                userId: space.userId,
-                name: space.name,
-                icon: space.icon,
-                color: space.color,
-                isLocked: true,  // Lock all spaces
-                orderIndex: space.orderIndex,
-                createdAt: space.createdAt,
-                fileCount: space.fileCount
-            )
-        }
-        
-        spaces = updatedSpaces
-        saveSpacesToLocalStorage(spaces: spaces, userId: userId)
-        
-        // Save to DynamoDB if user has cloud backup
-        if let user = user, user.hasCloudBackup {
-            Task {
-                for space in updatedSpaces {
-                    try? await DynamoDBService.shared.saveSpace(space)
-                }
-            }
-        }
-        
+        updateAllSpacesLockState(isLocked: true)
         vaultMode = .locked
         stopFocusModeTimer()
     }
     
+    func toggleVaultLockState() {
+        let shouldUnlockAll = !spaces.isEmpty && spaces.allSatisfy(\.isLocked)
+        
+        if shouldUnlockAll {
+            updateAllSpacesLockState(isLocked: false)
+            vaultMode = .browse
+        } else {
+            lockVault()
+        }
+    }
+    
     func unlockVault() async {
         guard vaultMode == .locked else { return }
+        
+        if !AppPreferences.faceIDEnabled {
+            await MainActor.run {
+                updateAllSpacesLockState(isLocked: false)
+                vaultMode = .browse
+            }
+            return
+        }
         
         // Check if biometrics are available
         var error: NSError?
@@ -1783,7 +2012,7 @@ class VaultHomeViewModel: ObservableObject {
                 do {
                     let success = try await authContext.evaluatePolicy(
                         .deviceOwnerAuthentication,
-                        localizedReason: "Unlock your vault"
+                        localizedReason: "Unlock \(AppConfig.appName) to access your encrypted files"
                     )
                     if success {
                         await MainActor.run {
@@ -1802,11 +2031,12 @@ class VaultHomeViewModel: ObservableObject {
         do {
             let success = try await authContext.evaluatePolicy(
                 .deviceOwnerAuthenticationWithBiometrics,
-                localizedReason: "Unlock your vault"
+                localizedReason: "Unlock \(AppConfig.appName) to access your encrypted files"
             )
             
             if success {
                 await MainActor.run {
+                    updateAllSpacesLockState(isLocked: false)
                     vaultMode = .browse
                     
                     // Haptic feedback on successful unlock
@@ -1849,18 +2079,11 @@ class VaultHomeViewModel: ObservableObject {
         }
         
         guard let user = user else { return false }
-        
-        // Check if user is on free trial (no pro features)
-        if user.subscriptionStatus == .none && !user.isPro {
-            return spaces.count < AppConfig.freeTierMaxSpaces
-        }
-        
-        let maxSpaces = user.isPro ? AppConfig.proTierMaxSpaces : AppConfig.freeTierMaxSpaces
-        
-        return spaces.count < maxSpaces
+
+        return spaces.count < user.effectiveTier.maxSpaces
     }
     
-    func createSpace(name: String, icon: String, color: String) {
+    func createSpace(name: String, icon: String, color: String, orderIndex: Int? = nil) {
         guard let userId = user?.id else { return }
         
         // Check space limit BEFORE creating
@@ -1874,7 +2097,7 @@ class VaultHomeViewModel: ObservableObject {
             name: name,
             icon: icon,
             color: color,
-            orderIndex: spaces.count
+            orderIndex: orderIndex ?? nextAvailableOrderIndex()
         )
         
         // Add to local array immediately
@@ -1898,7 +2121,29 @@ class VaultHomeViewModel: ObservableObject {
             }
         }
     }
+
+    private func nextAvailableOrderIndex() -> Int {
+        let used = Set(spaces.map(\.orderIndex))
+        var candidate = 0
+        while used.contains(candidate) {
+            candidate += 1
+        }
+        return candidate
+    }
     
+    func createSpaceFromDefault(_ space: Space) {
+        spaces.append(space)
+        calculateStats()
+        if let userId = user?.id {
+            saveSpacesToLocalStorage(spaces: spaces, userId: userId)
+        }
+        Task {
+            if let user = user, user.hasCloudBackup {
+                try? await DynamoDBService.shared.saveSpace(space)
+            }
+        }
+    }
+
     /// Save all data before app closes
     func saveAllData() {
         guard let userId = user?.id else { return }
@@ -1998,20 +2243,79 @@ class VaultHomeViewModel: ObservableObject {
         }
     }
     
+    private func updateAllSpacesLockState(isLocked: Bool) {
+        guard let userId = user?.id else { return }
+        
+        let updatedSpaces = spaces.map { space in
+            Space(
+                id: space.id,
+                userId: space.userId,
+                name: space.name,
+                icon: space.icon,
+                color: space.color,
+                isLocked: isLocked,
+                orderIndex: space.orderIndex,
+                createdAt: space.createdAt,
+                fileCount: space.fileCount
+            )
+        }
+        
+        spaces = updatedSpaces
+        saveSpacesToLocalStorage(spaces: spaces, userId: userId)
+        
+        if let user = user, user.hasCloudBackup {
+            Task {
+                for space in updatedSpaces {
+                    try? await DynamoDBService.shared.saveSpace(space)
+                }
+            }
+        }
+    }
+    
+    /// Move all files from one space to another (local + DynamoDB), then caller can delete the source space.
+    func moveAllFiles(from sourceSpace: Space, to targetSpace: Space) async throws {
+        guard let userId = user?.id, sourceSpace.id != targetSpace.id else { return }
+        let files = try LocalFileMetadataService.shared.loadFilesForSpace(userId: userId, spaceId: sourceSpace.id)
+        for file in files {
+            let updatedFile = file.with(spaceId: targetSpace.id)
+            try LocalFileMetadataService.shared.updateFileMetadata(updatedFile, userId: userId, oldSpaceId: sourceSpace.id)
+            if user?.hasCloudBackup == true {
+                try await DynamoDBService.shared.saveFileMetadata(updatedFile)
+            }
+        }
+        NotificationCenter.default.post(name: .vaultFilesDidChange, object: nil)
+        await loadSpacesAsync()
+        await calculateStatsAsync()
+    }
+
     func deleteSpace(_ space: Space) async throws {
         guard let userId = user?.id,
               let index = spaces.firstIndex(where: { $0.id == space.id }) else { return }
-        
-        // Remove from local array
+
+        // Delete every file in this space (local + cloud) so All Files and counts stay correct
+        let filesInSpace = (try? LocalFileMetadataService.shared.loadFilesForSpace(userId: userId, spaceId: space.id)) ?? []
+        let localStorage = LocalStorageService()
+        for file in filesInSpace {
+            try? localStorage.deleteEncryptedFile(fileId: file.id)
+            try? localStorage.deleteEncryptedFile(fileId: "\(file.id)_thumb")
+            LocalFileMetadataService.shared.deleteFileMetadata(fileId: file.id, userId: file.userId, spaceId: file.spaceId)
+            try? await DynamoDBService.shared.deleteFileMetadata(userId: file.userId, fileId: file.id)
+            try? await S3Service.shared.deleteFile(key: file.s3Key)
+            if let thumbKey = file.thumbnailS3Key { try? await S3Service.shared.deleteFile(key: thumbKey) }
+        }
+        try? await SyncService.shared.reconcileCloudStateNow(lastSyncAt: Date())
+
+        // Remove space from local array and storage
         spaces.remove(at: index)
         saveSpacesToLocalStorage(spaces: spaces, userId: userId)
-        
-        // Delete from DynamoDB if user has cloud backup
+
+        // Delete space from DynamoDB if user has cloud backup
         if let user = user, user.hasCloudBackup {
             try await DynamoDBService.shared.deleteSpace(userId: userId, spaceId: space.id)
         }
-        
-        // Recalculate stats
+
+        NotificationCenter.default.post(name: .vaultFilesDidChange, object: nil)
+        await loadSpacesAsync()
         calculateStats()
     }
 }

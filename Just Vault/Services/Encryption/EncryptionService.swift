@@ -14,15 +14,27 @@ class EncryptionService {
     /// Encrypt file data using AES-256-GCM
     /// Format: [IV (12 bytes)][Ciphertext][Tag (16 bytes)]
     func encryptFile(_ data: Data, fileId: String) throws -> Data {
-        // 1. Get master key from Secure Enclave (create if doesn't exist)
+        // 1. Get master key from Keychain (create if doesn't exist)
         let masterKey: SymmetricKey
         do {
             masterKey = try secureEnclave.getMasterKey()
         } catch SecureEnclaveError.keyNotFound {
             // Generate and store master key on first use
             let newKey = generateMasterKey()
-            try secureEnclave.storeMasterKey(newKey)
+            do {
+                try secureEnclave.storeMasterKey(newKey)
+            } catch {
+                #if DEBUG
+                print("EncryptionService: failed to store master key: \(error)")
+                #endif
+                throw EncryptionError.encryptionFailed
+            }
             masterKey = newKey
+        } catch {
+            #if DEBUG
+            print("EncryptionService: failed to get master key: \(error)")
+            #endif
+            throw EncryptionError.keyNotFound
         }
         
         // 2. Derive file-specific key using HKDF
@@ -82,6 +94,13 @@ class EncryptionService {
     /// Generate a new master key (for first-time setup)
     func generateMasterKey() -> SymmetricKey {
         return SymmetricKey(size: .bits256)
+    }
+
+    /// Ensure master key exists (create and store if not). Use before e.g. SetRecoveryQuestionsView.
+    func ensureMasterKeyExists() throws {
+        guard !secureEnclave.hasMasterKey() else { return }
+        let newKey = generateMasterKey()
+        try secureEnclave.storeMasterKey(newKey)
     }
 }
 

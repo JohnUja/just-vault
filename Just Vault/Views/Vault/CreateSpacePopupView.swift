@@ -15,16 +15,17 @@ struct CreateSpacePopupView: View {
     @State private var selectedIcon: String = "doc.text.fill"
     @State private var selectedColor: String = "#007AFF"
     
-    // Limited to 8 icons (4 per row)
-    let icons = [
+    static let icons = [
         "doc.text.fill", "briefcase.fill", "heart.fill", "house.fill",
-        "star.fill", "book.fill", "camera.fill", "folder.fill"
+        "star.fill", "book.fill", "camera.fill", "folder.fill",
+        "lock.fill", "key.fill", "creditcard.fill", "photo.fill",
+        "doc.fill", "tray.full.fill", "archivebox.fill", "tag.fill"
     ]
     
-    // Limited to 8 colors (4 per row)
-    let colors = [
+    static let colors = [
         "#007AFF", "#FF3B30", "#34C759", "#FF9500",
-        "#AF52DE", "#5856D6", "#00C7BE", "#FFCC00"
+        "#AF52DE", "#5856D6", "#00C7BE", "#FFCC00",
+        "#E91E63", "#009688", "#795548", "#607D8B"
     ]
     
     var body: some View {
@@ -59,7 +60,7 @@ struct CreateSpacePopupView: View {
                         Rectangle()
                             .fill(
                                 LinearGradient(
-                                    colors: [Color.orange.opacity(0.6), Color.orange.opacity(0.3)],
+                                    colors: [AppTheme.accent.opacity(0.6), AppTheme.accent.opacity(0.3)],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -93,7 +94,7 @@ struct CreateSpacePopupView: View {
                             .foregroundColor(.primary)
                         
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-                            ForEach(icons, id: \.self) { icon in
+                            ForEach(Self.icons, id: \.self) { icon in
                                 IconButton(
                                     icon: icon,
                                     isSelected: selectedIcon == icon,
@@ -111,7 +112,7 @@ struct CreateSpacePopupView: View {
                             .foregroundColor(.primary)
                         
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-                            ForEach(colors, id: \.self) { color in
+                            ForEach(Self.colors, id: \.self) { color in
                                 ColorButton(
                                     color: color,
                                     isSelected: selectedColor == color,
@@ -121,39 +122,37 @@ struct CreateSpacePopupView: View {
                         }
                     }
                     .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
-                }
-            }
-            
-            // Create Button (fixed at bottom)
-            VStack(spacing: 0) {
-                Divider()
-                
-                Button(action: {
-                    let trimmedName = spaceName.trimmingCharacters(in: .whitespaces)
-                    if !trimmedName.isEmpty {
-                        onCreate(trimmedName, selectedIcon, selectedColor)
-                        dismiss()
+                    
+                    // Create Button inside ScrollView so keyboard doesn't cover it
+                    Button(action: {
+                        let trimmedName = spaceName.trimmingCharacters(in: .whitespaces)
+                        if !trimmedName.isEmpty {
+                            onCreate(trimmedName, selectedIcon, selectedColor)
+                            dismiss()
+                        }
+                    }) {
+                        Text("Create Space")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(AppTheme.accent, lineWidth: 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(AppTheme.accent.opacity(0.05))
+                                    )
+                            )
                     }
-                }) {
-                    Text("Create Space")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.orange, lineWidth: 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.orange.opacity(0.05))
-                                )
-                        )
+                    .disabled(spaceName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .opacity(spaceName.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1.0)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                    .padding(.bottom, 48)
                 }
-                .disabled(spaceName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .opacity(spaceName.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1.0)
             }
-            .background(Color(uiColor: .systemBackground))
+            .scrollDismissesKeyboard(.interactively)
         }
         .frame(width: 420, height: 600)
         .background(Color(uiColor: .systemBackground))
@@ -179,7 +178,7 @@ struct IconButton: View {
                     .frame(width: 50, height: 50)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(isSelected ? Color.orange : Color.clear, lineWidth: 2)
+                            .stroke(isSelected ? AppTheme.accent : Color.clear, lineWidth: 2)
                             .frame(width: 50, height: 50)
                     )
                 

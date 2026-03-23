@@ -10,215 +10,376 @@ import SwiftUI
 struct FilesView: View {
     @StateObject private var viewModel = FilesViewModel()
     @EnvironmentObject var authService: AuthenticationService
-    let spaces: [Space] // Pass from parent
+    let spaces: [Space]
+    
     @State private var sortOption: FileSortOption = .name
-    @State private var showFilterSheet = false
+    @State private var sortDirection: SortDirection = .ascending
+    @State private var viewMode: VaultFileBrowserMode = .grid
+    @State private var cloudFilter: CloudFilterOption = .all
+    @State private var previewFile: VaultFile?
+    @State private var fileToDelete: VaultFile?
+    @State private var fileToMove: VaultFile?
+    @State private var fileToRename: VaultFile?
+    @State private var renameText = ""
+    @State private var showMoveSheet = false
+    @State private var showDeleteConfirmation = false
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
-                // Background - royal/wine purple
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.32, green: 0.08, blue: 0.42),
-                        Color(red: 0.38, green: 0.1, blue: 0.48),
-                        Color(red: 0.28, green: 0.06, blue: 0.38)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                AppTheme.backgroundGradient.ignoresSafeArea()
                 
                 if viewModel.files.isEmpty {
                     EmptyFilesView()
                 } else {
-                    // Preview grid layout (like JustScan homepage)
-                    previewGridView
+                    browserView
                 }
             }
             .navigationBarHidden(true)
-            .sheet(isPresented: $showFilterSheet) {
-                FileFilterSheet(
-                    sortOption: $sortOption,
-                    onApply: {
-                        viewModel.sortFiles(by: sortOption)
-                        // Update viewModel's internal sort option
-                        viewModel.updateSortOption(sortOption)
-                    }
-                )
-            }
             .onAppear {
                 viewModel.setUserId(authService.currentUser?.id ?? "placeholder")
                 viewModel.setSpaces(spaces)
-                if let savedSort = UserDefaults.standard.string(forKey: "fileSortOption"),
-                   let option = FileSortOption.allCases.first(where: { $0.rawValue == savedSort }) {
-                    sortOption = option
-                }
+                loadSavedSortState()
             }
-            .onChange(of: spaces) { oldSpaces, newSpaces in
+            .onChange(of: spaces) { _, newSpaces in
                 viewModel.setSpaces(newSpaces)
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("VaultFilesDidChange"))) { _ in
                 viewModel.reloadFiles()
             }
-        }
-    }
-    
-    // Preview grid layout (like JustScan homepage)
-    private var previewGridView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header with sort and filter options
-                HStack {
-                    Text("All Files")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Spacer()
-                    
-                    // Filter button
-                    Button(action: { showFilterSheet = true }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                            Text("Filter")
+            .sheet(item: $previewFile) { file in
+                FilePreviewView(file: file)
+            }
+            .sheet(isPresented: $showMoveSheet) {
+                MoveFilesView(
+                    fileIds: fileToMove.map { [$0.id] } ?? [],
+                    currentSpace: currentSpaceForMove,
+                    allSpaces: spaces,
+                    onMove: { targetSpaceId in
+                        guard let file = fileToMove else { return }
+                        Task {
+                            await viewModel.moveFile(file, to: targetSpaceId)
+                            fileToMove = nil
                         }
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.clear)
-                                )
-                        )
+                    }
+                )
+            }
+            .alert("Delete File", isPresented: $showDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    guard let file = fileToDelete else { return }
+                    Task {
+                        await viewModel.deleteFile(file)
+                        fileToDelete = nil
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                
-                // File preview grid (3 columns like JustScan)
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12)
-                ], spacing: 16) {
-                    ForEach(viewModel.getSortedFiles(by: sortOption)) { file in
-                        RecentFileCard(file: file)
+                Button("Cancel", role: .cancel) {
+                    fileToDelete = nil
+                }
+            } message: {
+                Text("Delete '\(fileToDelete?.displayName ?? "this file")'?")
+            }
+            .alert("Rename File", isPresented: Binding(
+                get: { fileToRename != nil },
+                set: { if !$0 { fileToRename = nil } }
+            )) {
+                TextField("File name", text: $renameText)
+                Button("Save") {
+                    guard let file = fileToRename else { return }
+                    Task {
+                        await viewModel.renameFile(file, to: renameText)
+                        fileToRename = nil
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
+                Button("Cancel", role: .cancel) {
+                    fileToRename = nil
+                }
+            } message: {
+                Text("Choose a new display name.")
             }
         }
     }
+    
+    private var browserView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                headerBar
+                if authService.currentUser?.hasCloudBackup ?? false {
+                    VStack(alignment: .leading, spacing: 4) {
+                        cloudFilterPicker
+                        Text("Local only = on this device · Cloud = backed up")
+                            .font(.caption2)
+                            .foregroundColor(AppTheme.secondaryText)
+                    }
+                    .padding(.horizontal, 20)
+                }
+                
+                if viewMode == .grid {
+                    LazyVGrid(columns: gridColumns, spacing: 18) {
+                        ForEach(filteredSortedFiles) { file in
+                            VaultFileBrowserItemView(
+                                file: file,
+                                mode: .grid,
+                                isPro: authService.currentUser?.isPro ?? false,
+                                onOpen: { previewFile = file },
+                                onPreview: { previewFile = file },
+                                onMove: {
+                                    fileToMove = file
+                                    showMoveSheet = true
+                                },
+                                onRename: {
+                                    fileToRename = file
+                                    renameText = file.displayName
+                                },
+                                onDelete: {
+                                    fileToDelete = file
+                                    showDeleteConfirmation = true
+                                },
+                                onCloudUpload: {
+                                    SyncService.shared.queueFileForSync(file, force: true)
+                                },
+                                onCloudDelete: {
+                                    Task { await viewModel.removeFileFromCloud(file) }
+                                }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 20)
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(filteredSortedFiles) { file in
+                            VaultFileBrowserItemView(
+                                file: file,
+                                mode: .list,
+                                isPro: authService.currentUser?.isPro ?? false,
+                                onOpen: { previewFile = file },
+                                onPreview: { previewFile = file },
+                                onMove: {
+                                    fileToMove = file
+                                    showMoveSheet = true
+                                },
+                                onRename: {
+                                    fileToRename = file
+                                    renameText = file.displayName
+                                },
+                                onDelete: {
+                                    fileToDelete = file
+                                    showDeleteConfirmation = true
+                                },
+                                onCloudUpload: {
+                                    SyncService.shared.queueFileForSync(file, force: true)
+                                },
+                                onCloudDelete: {
+                                    Task { await viewModel.removeFileFromCloud(file) }
+                                }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+        }
+    }
+    
+    private var headerBar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("All Files")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundColor(AppTheme.headerTint)
+
+            HStack(spacing: 10) {
+                Text("\(filteredSortedFiles.count) \(filteredSortedFiles.count == 1 ? "file" : "files")")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(AppTheme.secondaryText)
+
+                Spacer()
+
+                Button(action: toggleViewMode) {
+                    Image(systemName: viewMode == .grid ? "list.bullet" : "square.grid.2x2")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
+                        .frame(width: 34, height: 34)
+                        .background(
+                            RoundedRectangle(cornerRadius: 9)
+                                .fill(AppTheme.cardBackground)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 9)
+                                        .stroke(AppTheme.outline, lineWidth: 1)
+                                )
+                        )
+                }
+
+                Menu {
+                    sortMenuButton(for: .name, ascendingLabel: "Name A-Z", descendingLabel: "Name Z-A")
+                    sortMenuButton(for: .date, ascendingLabel: "First Added", descendingLabel: "Last Added")
+                    sortMenuButton(for: .size, ascendingLabel: "Smallest", descendingLabel: "Biggest")
+                    sortMenuButton(for: .space, ascendingLabel: "Space A-Z", descendingLabel: "Space Z-A")
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.up.arrow.down")
+                        Text(sortButtonLabel)
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(AppTheme.cardBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9)
+                                    .stroke(AppTheme.outline, lineWidth: 1)
+                            )
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+    }
+    
+    private var gridColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 16),
+            GridItem(.flexible(), spacing: 16)
+        ]
+    }
+    
+    private var sortedFiles: [VaultFile] {
+        viewModel.sortedFiles(by: sortOption, direction: sortDirection)
+    }
+
+    /// All = every file. Cloud = backed up to cloud. Local = only on this device (not synced).
+    private var filteredSortedFiles: [VaultFile] {
+        sortedFiles.filter { file in
+            switch cloudFilter {
+            case .all:
+                return true
+            case .cloud:
+                return file.syncStatus == .synced
+            case .local:
+                return file.syncStatus != .synced
+            }
+        }
+    }
+
+    private var cloudFilterPicker: some View {
+        Picker("Storage Filter", selection: $cloudFilter) {
+            ForEach(CloudFilterOption.allCases, id: \.self) { option in
+                Text(option.rawValue).tag(option)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+    
+    private var sortButtonLabel: String {
+        switch (sortOption, sortDirection) {
+        case (.name, .ascending): return "Name A-Z"
+        case (.name, .descending): return "Name Z-A"
+        case (.date, .ascending): return "First Added"
+        case (.date, .descending): return "Last Added"
+        case (.size, .ascending): return "Smallest"
+        case (.size, .descending): return "Biggest"
+        case (.space, .ascending): return "Space A-Z"
+        case (.space, .descending): return "Space Z-A"
+        }
+    }
+    
+    private var currentSpaceForMove: Space {
+        guard
+            let file = fileToMove,
+            let space = spaces.first(where: { $0.id == file.spaceId })
+        else {
+            return Space.create(userId: authService.currentUser?.id ?? "placeholder", name: "Current Space")
+        }
+        return space
+    }
+    
+    private func toggleViewMode() {
+        viewMode = viewMode == .grid ? .list : .grid
+        saveSortState()
+    }
+    
+    private func toggleSort(for option: FileSortOption) {
+        if sortOption == option {
+            sortDirection = sortDirection == .ascending ? .descending : .ascending
+        } else {
+            sortOption = option
+            switch option {
+            case .name, .space:
+                sortDirection = .ascending
+            case .date, .size:
+                sortDirection = .descending
+            }
+        }
+        saveSortState()
+    }
+    
+    @ViewBuilder
+    private func sortMenuButton(for option: FileSortOption, ascendingLabel: String, descendingLabel: String) -> some View {
+        Button {
+            toggleSort(for: option)
+        } label: {
+            Label(
+                sortOption == option && sortDirection == .descending ? descendingLabel : ascendingLabel,
+                systemImage: sortOption == option ? "checkmark" : "circle"
+            )
+        }
+    }
+    
+    private func loadSavedSortState() {
+        if let savedSort = UserDefaults.standard.string(forKey: "fileSortOption"),
+           let option = FileSortOption.allCases.first(where: { $0.rawValue == savedSort }) {
+            sortOption = option
+        }
+        
+        if let savedDirection = UserDefaults.standard.string(forKey: "fileSortDirection"),
+           let direction = SortDirection(rawValue: savedDirection) {
+            sortDirection = direction
+        }
+        
+        if let savedMode = UserDefaults.standard.string(forKey: "fileViewMode") {
+            viewMode = savedMode == "list" ? .list : .grid
+        }
+    }
+    
+    private func saveSortState() {
+        UserDefaults.standard.set(sortOption.rawValue, forKey: "fileSortOption")
+        UserDefaults.standard.set(sortDirection.rawValue, forKey: "fileSortDirection")
+        UserDefaults.standard.set(viewMode == .grid ? "grid" : "list", forKey: "fileViewMode")
+    }
 }
 
-enum FileViewMode {
-    case grid
-    case list
+enum SortDirection: String {
+    case ascending
+    case descending
 }
-
-// FileSortOption enum moved to FileFilterSheet.swift for shared access
 
 struct EmptyFilesView: View {
     var body: some View {
         VStack(spacing: 20) {
-            Image(systemName: "doc.text.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.white.opacity(0.7))
+            Image(systemName: "tray.fill")
+                .font(.system(size: 44, weight: .light))
+                .foregroundColor(AppTheme.accent.opacity(0.4))
+                .padding(18)
+                .background(
+                    Circle().fill(AppTheme.accent.opacity(0.06))
+                )
             
             Text("No Files Yet")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(AppTheme.headerTint)
             
-            Text("Add files to your spaces to see them here")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.8))
+            Text("Files you add to your spaces will appear here")
+                .font(.system(size: 14))
+                .foregroundColor(AppTheme.secondaryText)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                .padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-struct FileRowView: View {
-    let file: VaultFile
-    @State private var showPreview = false
-    
-    var body: some View {
-        Button(action: {
-            showPreview = true
-        }) {
-            HStack(spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.blue.opacity(0.2), Color.purple.opacity(0.15)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 48, height: 48)
-                    
-                    Image(systemName: iconForFile(file))
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [Color.blue, Color.purple],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                }
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(file.displayName)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    
-                    Text("\(file.sizeMB, specifier: "%.1f") MB")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                if file.starred {
-                    Image(systemName: "star.fill")
-                        .foregroundColor(.yellow)
-                        .font(.system(size: 16))
-                }
-                
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.secondary)
-            }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
-            )
-        }
-        .sheet(isPresented: $showPreview) {
-            FilePreviewView(file: file)
-        }
-    }
-    
-    private func iconForFile(_ file: VaultFile) -> String {
-        if file.isImage {
-            return "photo.fill"
-        } else if file.isPDF {
-            return "doc.fill"
-        } else {
-            return "doc.text.fill"
-        }
     }
 }
 
@@ -228,24 +389,25 @@ class FilesViewModel: ObservableObject {
     private var userId: String = "placeholder"
     private var allSpaces: [Space] = []
     
-    func getSortedFiles(by option: FileSortOption) -> [VaultFile] {
+    func sortedFiles(by option: FileSortOption, direction: SortDirection) -> [VaultFile] {
         var sorted = files
         switch option {
         case .name:
-            sorted.sort { $0.displayName < $1.displayName }
+            sorted.sort { direction == .ascending ? $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending : $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedDescending }
         case .date:
-            sorted.sort { $0.createdAt > $1.createdAt }
+            sorted.sort { direction == .ascending ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt }
         case .size:
-            sorted.sort { $0.sizeBytes > $1.sizeBytes }
+            sorted.sort { direction == .ascending ? $0.sizeBytes < $1.sizeBytes : $0.sizeBytes > $1.sizeBytes }
         case .space:
-            sorted.sort { $0.spaceId < $1.spaceId }
+            sorted.sort { lhsFile, rhsFile in
+                let lhs = allSpaces.first(where: { $0.id == lhsFile.spaceId })?.name ?? lhsFile.spaceId
+                let rhs = allSpaces.first(where: { $0.id == rhsFile.spaceId })?.name ?? rhsFile.spaceId
+                return direction == .ascending
+                    ? lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+                    : lhs.localizedCaseInsensitiveCompare(rhs) == .orderedDescending
+            }
         }
         return sorted
-    }
-    
-    func updateSortOption(_ option: FileSortOption) {
-        // Store sort option for persistence
-        UserDefaults.standard.set(option.rawValue, forKey: "fileSortOption")
     }
     
     var filesGroupedBySpace: [FileGroup] {
@@ -257,7 +419,7 @@ class FilesViewModel: ObservableObject {
                     spaceId: spaceId,
                     spaceName: space?.name ?? "Unknown",
                     spaceIcon: space?.icon ?? "folder.fill",
-                    spaceColor: space?.color ?? "#007AFF",
+                    spaceColor: space?.color ?? "#2A7C7B",
                     files: files
                 )
             }
@@ -282,17 +444,78 @@ class FilesViewModel: ObservableObject {
         allSpaces = spaces
     }
     
-    func sortFiles(by option: FileSortOption) {
-        switch option {
-        case .name:
-            files.sort { $0.displayName < $1.displayName }
-        case .date:
-            files.sort { $0.createdAt > $1.createdAt }
-        case .size:
-            files.sort { $0.sizeBytes > $1.sizeBytes }
-        case .space:
-            files.sort { $0.spaceId < $1.spaceId }
+    func renameFile(_ file: VaultFile, to newDisplayName: String) async {
+        let trimmedName = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        
+        let renamedFile = VaultFile(
+            id: file.id,
+            userId: file.userId,
+            spaceId: file.spaceId,
+            displayName: trimmedName,
+            sizeBytes: file.sizeBytes,
+            mimeType: file.mimeType,
+            createdAt: file.createdAt,
+            lastOpenedAt: file.lastOpenedAt,
+            starred: file.starred,
+            localPath: file.localPath,
+            s3Key: file.s3Key,
+            syncStatus: file.syncStatus,
+            version: file.version + 1,
+            thumbnailS3Key: file.thumbnailS3Key
+        )
+        
+        try? LocalFileMetadataService.shared.updateFileMetadata(renamedFile, userId: file.userId)
+        try? await DynamoDBService.shared.saveFileMetadata(renamedFile)
+        await loadFilesAsync()
+    }
+    
+    func moveFile(_ file: VaultFile, to targetSpaceId: String) async {
+        let updatedFile = VaultFile(
+            id: file.id,
+            userId: file.userId,
+            spaceId: targetSpaceId,
+            displayName: file.displayName,
+            sizeBytes: file.sizeBytes,
+            mimeType: file.mimeType,
+            createdAt: file.createdAt,
+            lastOpenedAt: file.lastOpenedAt,
+            starred: file.starred,
+            localPath: file.localPath,
+            s3Key: file.s3Key,
+            syncStatus: file.syncStatus,
+            version: file.version,
+            thumbnailS3Key: file.thumbnailS3Key
+        )
+        
+        try? LocalFileMetadataService.shared.updateFileMetadata(updatedFile, userId: file.userId, oldSpaceId: file.spaceId)
+        try? await DynamoDBService.shared.saveFileMetadata(updatedFile)
+        await loadFilesAsync()
+    }
+    
+    func deleteFile(_ file: VaultFile) async {
+        let localStorage = LocalStorageService()
+        try? localStorage.deleteEncryptedFile(fileId: file.id)
+        try? localStorage.deleteEncryptedFile(fileId: "\(file.id)_thumb")
+        LocalFileMetadataService.shared.deleteFileMetadata(fileId: file.id, userId: file.userId, spaceId: file.spaceId)
+        try? await DynamoDBService.shared.deleteFileMetadata(userId: file.userId, fileId: file.id)
+        try? await S3Service.shared.deleteFile(key: file.s3Key)
+        if let thumbnailKey = file.thumbnailS3Key {
+            try? await S3Service.shared.deleteFile(key: thumbnailKey)
         }
+        await SyncService.shared.reconcileCloudStateNow(lastSyncAt: Date())
+        
+        await loadFilesAsync()
+    }
+
+    func removeFileFromCloud(_ file: VaultFile) async {
+        do {
+            try await SyncService.shared.removeFileFromCloud(file)
+        } catch {
+            print("Failed to remove file from cloud: \(error.localizedDescription)")
+        }
+
+        await loadFilesAsync()
     }
     
     private func loadFiles() {
@@ -317,12 +540,18 @@ class FilesViewModel: ObservableObject {
         // Try to load from DynamoDB (for Pro users) and merge
         do {
             let cloudFiles = try await DynamoDBService.shared.loadAllFiles(userId: userId)
-            let localIds = Set(allFiles.map { $0.id })
-            let newFiles = cloudFiles.filter { !localIds.contains($0.id) }
-            allFiles.append(contentsOf: newFiles)
+            var mergedById = Dictionary(uniqueKeysWithValues: allFiles.map { ($0.id, $0) })
+            for file in cloudFiles {
+                mergedById[file.id] = file
+                try? LocalFileMetadataService.shared.saveFileMetadata(file, userId: userId)
+            }
+            allFiles = Array(mergedById.values)
         } catch {
             // If DynamoDB fails (free user or no connection), use local files only
-            print("Cloud sync not available: \(error.localizedDescription)")
+            let message = error.localizedDescription
+            if !message.contains("Cloud sync is only available") {
+                print("Failed to load cloud files: \(message)")
+            }
         }
         
         await MainActor.run {

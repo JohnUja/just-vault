@@ -42,7 +42,7 @@ class CredentialManager {
         secretAccessKey: String?,
         sessionToken: String?,
         expiration: Date?,
-        tokens: CognitoTokens
+        tokens: CognitoTokens?
     ) throws {
         // Convert to our internal storage format
         let stored = StoredCredentials(
@@ -78,12 +78,13 @@ class CredentialManager {
     func getCredentials() async throws -> (identityId: String, accessKeyId: String, secretAccessKey: String, sessionToken: String?) {
         // Check if credentials are expired (with 5 minute buffer)
         if let expiration = expirationDate, expiration <= Date().addingTimeInterval(300) {
-            // Credentials expired or expiring soon - need to refresh
-            // For Pro members, try to refresh automatically
+            // Credentials expired or expiring soon — need re-sign-in to get new credentials
             if DeveloperMode.isEnabled {
-                // In dev mode, allow expired credentials for testing
                 print("Warning: Credentials expired but allowing in dev mode")
             } else {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .credentialsExpiredNeedsReSignIn, object: nil)
+                }
                 throw CredentialError.credentialsExpired
             }
         }

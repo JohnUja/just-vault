@@ -2,36 +2,31 @@
 //  GhostHexagonView.swift
 //  Just Vault
 //
-//  Ghost/empty hexagon slot with + icon
+//  Ghost/empty hexagon slot
 //
 
 import SwiftUI
 
 struct GhostHexagonView: View {
+    var hexSide: CGFloat = 120
     let onTap: () -> Void
+
+    private var k: CGFloat { hexSide / 120 }
     
     var body: some View {
         Button(action: onTap) {
             ZStack {
-                // Dashed outline
                 HexagonShape()
                     .stroke(
-                        Color.gray.opacity(0.3),
-                        style: StrokeStyle(
-                            lineWidth: 2,
-                            dash: [5, 5]
-                        )
+                        AppTheme.outline,
+                        style: StrokeStyle(lineWidth: 1.5 * k, dash: [6 * k, 4 * k])
                     )
-                    .frame(width: 130, height: 130)
+                    .frame(width: hexSide, height: hexSide)
                 
-                // Plus icon
                 Image(systemName: "plus")
-                    .font(.system(size: 24, weight: .light))
-                    .foregroundColor(.gray.opacity(0.5))
+                    .font(.system(size: 20 * k, weight: .light))
+                    .foregroundColor(AppTheme.secondaryText.opacity(0.5))
             }
         }
     }
 }
-
-
-

@@ -44,6 +44,26 @@ struct VaultFile: Codable, Identifiable {
     var isPDF: Bool {
         mimeType == "application/pdf"
     }
+
+    /// Returns a copy of this file with a different spaceId (e.g. when moving to another space).
+    func with(spaceId newSpaceId: String) -> VaultFile {
+        VaultFile(
+            id: id,
+            userId: userId,
+            spaceId: newSpaceId,
+            displayName: displayName,
+            sizeBytes: sizeBytes,
+            mimeType: mimeType,
+            createdAt: createdAt,
+            lastOpenedAt: lastOpenedAt,
+            starred: starred,
+            localPath: localPath,
+            s3Key: s3Key,
+            syncStatus: syncStatus,
+            version: version,
+            thumbnailS3Key: thumbnailS3Key
+        )
+    }
 }
 
 enum SyncStatus: String, Codable {
@@ -51,5 +71,6 @@ enum SyncStatus: String, Codable {
     case syncing
     case synced
     case error
+    case localOnly
 }
 

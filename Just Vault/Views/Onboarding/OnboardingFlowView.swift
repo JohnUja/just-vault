@@ -9,23 +9,12 @@ import SwiftUI
 
 struct OnboardingFlowView: View {
     @State private var currentStep = 0
-    @State private var selectedTier: SubscriptionTier = .free
-    @State private var selectedBilling: BillingPeriod = .monthly
+    @State private var selectedTier: SubscriptionTier = .pro
+    @State private var selectedBilling: BillingPeriod = .yearly
     
     var body: some View {
         ZStack {
-            // Background - Bright purple/pink + white gradient (app-wide)
-            LinearGradient(
-                colors: [
-                    Color(red: 0.9, green: 0.5, blue: 0.9), // Bright purple/pink
-                    Color(red: 0.8, green: 0.4, blue: 0.85), // Medium purple/pink
-                    Color.white.opacity(0.9), // White
-                    Color(red: 0.85, green: 0.45, blue: 0.9).opacity(0.8) // Light purple/pink
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            AppTheme.backgroundGradient.ignoresSafeArea()
             
             TabView(selection: $currentStep) {
                 // Step 1: Welcome
@@ -88,7 +77,7 @@ struct WelcomeOnboardingView: View {
             }
             
             VStack(spacing: 16) {
-                Text("Just Vault")
+                Text(AppConfig.appName)
                     .font(.system(size: 42, weight: .bold))
                     .foregroundColor(.primary)
                 
@@ -149,326 +138,66 @@ struct FeatureRow: View {
     }
 }
 
-// MARK: - Paywall Screen
+// MARK: - Paywall Screen (same plan UI as Settings)
 
 struct PaywallOnboardingView: View {
     @Binding var selectedTier: SubscriptionTier
     @Binding var selectedBilling: BillingPeriod
     let onContinue: () -> Void
-    
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                // Header
-                VStack(spacing: 12) {
-                    Text("Choose Your Plan")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundColor(.primary)
-                    
-                    Text("Start free, upgrade anytime")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 60)
-                .padding(.bottom, 40)
-                
-                // Billing Period Toggle
-                BillingPeriodToggle(selectedBilling: $selectedBilling)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 30)
-                
-                // Tier Selection
-                VStack(spacing: 16) {
-                    // Free Tier Card
-                    TierCard(
-                        tier: .free,
-                        isSelected: selectedTier == .free,
-                        billing: selectedBilling,
-                        onSelect: {
-                            withAnimation(.spring(response: 0.3)) {
-                                selectedTier = .free
-                            }
-                        }
-                    )
-                    
-                    // Pro Tier Card
-                    TierCard(
-                        tier: .pro,
-                        isSelected: selectedTier == .pro,
-                        billing: selectedBilling,
-                        onSelect: {
-                            withAnimation(.spring(response: 0.3)) {
-                                selectedTier = .pro
-                            }
-                        }
-                    )
-                }
-                .padding(.horizontal, 20)
-                
-                // Feature Comparison
-                FeatureComparisonView()
-                    .padding(.top, 30)
-                    .padding(.horizontal, 20)
-                
-                // CTA Button
+            VStack(spacing: 24) {
+                SubscriptionPlanPickerSection(
+                    selectedBilling: $selectedBilling,
+                    selectedTier: $selectedTier,
+                    currentEffectiveTier: nil,
+                    additionalSubtitle: "You can change your plan later in Settings."
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 44)
+
                 Button(action: onContinue) {
-                    HStack {
-                        if selectedTier == .pro {
-                            Text(selectedBilling == .monthly ? "$6.99/month" : "$59.99/year")
-                                .font(.headline)
-                        } else {
-                            Text("Continue with Free")
-                                .font(.headline)
-                        }
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(
-                        selectedTier == .pro
-                            ? LinearGradient(
-                                colors: [Color(hex: "007AFF"), Color(hex: "5856D6")],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                            : LinearGradient(
-                                colors: [Color.gray, Color.gray],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                    )
-                    .cornerRadius(16)
+                    Text(onboardingCTATitle)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(onboardingCTABackground)
+                        .cornerRadius(25)
+                        .shadow(
+                            color: selectedTier == .free ? Color.clear : PaywallView.tierAccent(selectedTier).opacity(0.3),
+                            radius: 12,
+                            x: 0,
+                            y: 6
+                        )
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 30)
                 .padding(.bottom, 50)
             }
         }
-    }
-}
-
-// MARK: - Billing Period Toggle
-
-struct BillingPeriodToggle: View {
-    @Binding var selectedBilling: BillingPeriod
-    
-    var body: some View {
-        HStack(spacing: 0) {
-            // Monthly
-            Button(action: {
-                withAnimation(.spring(response: 0.3)) {
-                    selectedBilling = .monthly
-                }
-            }) {
-                VStack(spacing: 4) {
-                    Text("Monthly")
-                        .font(.headline)
-                        .foregroundColor(selectedBilling == .monthly ? .white : .primary)
-                    
-                    Text("$6.99/mo")
-                        .font(.caption)
-                        .foregroundColor(selectedBilling == .monthly ? .white.opacity(0.9) : .secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(selectedBilling == .monthly ? Color(hex: "007AFF") : Color.clear)
-                .cornerRadius(12, corners: [.topLeft, .bottomLeft])
-            }
-            
-            // Yearly
-            Button(action: {
-                withAnimation(.spring(response: 0.3)) {
-                    selectedBilling = .yearly
-                }
-            }) {
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text("Yearly")
-                            .font(.headline)
-                        Text("SAVE 29%")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(hex: "FF9500"))
-                            .foregroundColor(.white)
-                            .cornerRadius(4)
-                    }
-                    .foregroundColor(selectedBilling == .yearly ? .white : .primary)
-                    
-                    Text("$4.99/mo")
-                        .font(.caption)
-                        .foregroundColor(selectedBilling == .yearly ? .white.opacity(0.9) : .secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(selectedBilling == .yearly ? Color(hex: "007AFF") : Color.clear)
-                .cornerRadius(12, corners: [.topRight, .bottomRight])
-            }
+        .task {
+            await StoreKitService.shared.loadProducts()
         }
-        .background(Color(uiColor: .systemGray5))
-        .cornerRadius(12)
     }
-}
 
-enum BillingPeriod {
-    case monthly
-    case yearly
-}
+    /// Onboarding does not run StoreKit here; paid selection is intent only until the user subscribes in-app.
+    private var onboardingCTATitle: String {
+        if selectedTier == .free { return "Continue with Free" }
+        return "Continue with \(selectedTier.displayName)"
+    }
 
-// MARK: - Tier Card
-
-struct TierCard: View {
-    let tier: SubscriptionTier
-    let isSelected: Bool
-    let billing: BillingPeriod
-    let onSelect: () -> Void
-    
-    var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 0) {
-                // Header
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(tier == .free ? "Free" : "Pro")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.primary)
-                        
-                        if tier == .pro {
-                            Text(billing == .monthly ? "$6.99/month" : "$59.99/year")
-                                .font(.headline)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Forever free")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Selection indicator
-                    ZStack {
-                        Circle()
-                            .fill(isSelected ? Color(hex: "007AFF") : Color.clear)
-                            .frame(width: 24, height: 24)
-                            .overlay(
-                                Circle()
-                                    .stroke(isSelected ? Color(hex: "007AFF") : Color.gray, lineWidth: 2)
-                            )
-                        
-                        if isSelected {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                    }
-                }
-                .padding()
-                
-                // Features list
-                VStack(alignment: .leading, spacing: 12) {
-                    if tier == .free {
-                        TierFeature(icon: "checkmark.circle.fill", text: "250 MB cloud storage", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "2 spaces", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "Unlimited local storage", color: .green)
-                        TierFeature(icon: "xmark.circle.fill", text: "No cloud backup", color: .red)
-                        TierFeature(icon: "xmark.circle.fill", text: "No device restore", color: .red)
-                    } else {
-                        TierFeature(icon: "checkmark.circle.fill", text: "10 GB cloud storage", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "Unlimited spaces", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "Cloud backup & sync", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "Device restore", color: .green)
-                        TierFeature(icon: "checkmark.circle.fill", text: "Keychain recovery", color: .green)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.bottom)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(uiColor: .systemBackground))
-                    .shadow(color: isSelected ? Color(hex: "007AFF").opacity(0.3) : Color.black.opacity(0.1), radius: isSelected ? 10 : 5, x: 0, y: isSelected ? 5 : 2)
+    @ViewBuilder
+    private var onboardingCTABackground: some View {
+        if selectedTier == .free {
+            LinearGradient(
+                colors: [AppTheme.secondaryText, AppTheme.secondaryText.opacity(0.78)],
+                startPoint: .leading,
+                endPoint: .trailing
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isSelected ? Color(hex: "007AFF") : Color.clear, lineWidth: 2)
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
-struct TierFeature: View {
-    let icon: String
-    let text: String
-    let color: Color
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.body)
-                .foregroundColor(color)
-                .frame(width: 20)
-            
-            Text(text)
-                .font(.body)
-                .foregroundColor(.primary)
-            
-            Spacer()
-        }
-    }
-}
-
-// MARK: - Feature Comparison
-
-struct FeatureComparisonView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("What's the difference?")
-                .font(.headline)
-                .foregroundColor(.primary)
-            
-            VStack(spacing: 12) {
-                ComparisonRow(feature: "Cloud Storage", free: "250 MB", pro: "10 GB")
-                ComparisonRow(feature: "Spaces", free: "2", pro: "Unlimited")
-                ComparisonRow(feature: "Cloud Backup", free: "❌", pro: "✅")
-                ComparisonRow(feature: "Device Restore", free: "❌", pro: "✅")
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(uiColor: .systemGray6))
-        )
-    }
-}
-
-struct ComparisonRow: View {
-    let feature: String
-    let free: String
-    let pro: String
-    
-    var body: some View {
-        HStack {
-            Text(feature)
-                .font(.body)
-                .foregroundColor(.primary)
-                .frame(width: 120, alignment: .leading)
-            
-            Spacer()
-            
-            Text(free)
-                .font(.body)
-                .foregroundColor(.secondary)
-                .frame(width: 80, alignment: .center)
-            
-            Text(pro)
-                .font(.body)
-                .fontWeight(.semibold)
-                .foregroundColor(Color(hex: "007AFF"))
-                .frame(width: 80, alignment: .center)
+        } else {
+            let c = PaywallView.tierAccent(selectedTier)
+            LinearGradient(colors: [c, c.opacity(0.72)], startPoint: .leading, endPoint: .trailing)
         }
     }
 }
@@ -563,8 +292,12 @@ struct RecoveryOptionCard: View {
                             .fontWeight(.bold)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color(hex: "34C759"))
-                            .foregroundColor(.white)
+                            .foregroundColor(Color(hex: "007AFF"))
+                            .background(Capsule().fill(Color.clear))
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color(hex: "007AFF"), lineWidth: 1.5)
+                            )
                             .cornerRadius(4)
                     }
                 }

@@ -9,18 +9,20 @@ import SwiftUI
 
 struct SearchView: View {
     let spaces: [Space]
+    var onOpenSpace: ((Space) -> Void)?
+    var onOpenFile: ((VaultFile) -> Void)?
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var authService: AuthenticationService
     @State private var searchText = ""
     @StateObject private var viewModel = SearchViewModel()
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
                 // Search Bar
                 HStack {
                     Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(AppTheme.secondaryText)
                     
                     TextField("Search files and spaces...", text: $searchText)
                         .textInputAutocapitalization(.never)
@@ -40,12 +42,16 @@ struct SearchView: View {
                             searchText = ""
                         }) {
                             Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(AppTheme.secondaryText)
                         }
                     }
                 }
                 .padding()
-                .background(Color(uiColor: .secondarySystemBackground))
+                .background(AppTheme.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(AppTheme.outline, lineWidth: 1)
+                )
                 .cornerRadius(10)
                 .padding()
                 
@@ -54,10 +60,10 @@ struct SearchView: View {
                     VStack(spacing: 20) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 60))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(AppTheme.secondaryText)
                         Text("Search files and spaces")
                             .font(.title3)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(AppTheme.secondaryText)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewModel.isSearching {
@@ -67,10 +73,10 @@ struct SearchView: View {
                     VStack(spacing: 20) {
                         Image(systemName: "tray")
                             .font(.system(size: 60))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(AppTheme.secondaryText)
                         Text("No results found")
                             .font(.title3)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(AppTheme.secondaryText)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -80,6 +86,11 @@ struct SearchView: View {
                             Section("Spaces") {
                                 ForEach(viewModel.matchingSpaces) { space in
                                     SpaceSearchResultRow(space: space)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            dismiss()
+                                            onOpenSpace?(space)
+                                        }
                                 }
                             }
                         }
@@ -89,12 +100,21 @@ struct SearchView: View {
                             Section("Files") {
                                 ForEach(viewModel.matchingFiles) { file in
                                     FileSearchResultRow(file: file)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            dismiss()
+                                            onOpenFile?(file)
+                                        }
                                 }
                             }
                         }
                     }
+                    .scrollContentBackground(.hidden)
+                    .listStyle(.insetGrouped)
+                    .listRowBackground(AppTheme.cardBackground)
                 }
             }
+            .background(AppTheme.backgroundGradient.ignoresSafeArea())
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -102,6 +122,7 @@ struct SearchView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundColor(AppTheme.accent)
                 }
             }
         }
@@ -126,10 +147,11 @@ struct SpaceSearchResultRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(space.name)
                     .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(AppTheme.headerTint)
                 
                 Text("\(space.fileCount) files")
                     .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(AppTheme.secondaryText)
             }
             
             Spacer()
@@ -143,18 +165,19 @@ struct FileSearchResultRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: file.isPDF ? "doc.fill" : file.isImage ? "photo.fill" : "doc.text.fill")
+            Image(systemName: file.isPDF ? "doc.richtext" : file.isImage ? "photo" : "doc.text")
                 .font(.system(size: 24))
-                .foregroundColor(.secondary)
+                .foregroundColor(AppTheme.accent)
                 .frame(width: 40, height: 40)
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(file.displayName)
                     .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(AppTheme.headerTint)
                 
                 Text("\(String(format: "%.1f", file.sizeMB)) MB")
                     .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(AppTheme.secondaryText)
             }
             
             Spacer()

@@ -13,7 +13,7 @@ struct FileFilterSheet: View {
     let onApply: () -> Void
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section("Sort By") {
                     ForEach(FileSortOption.allCases, id: \.self) { option in
@@ -26,7 +26,7 @@ struct FileFilterSheet: View {
                                 Spacer()
                                 if sortOption == option {
                                     Image(systemName: "checkmark")
-                                        .foregroundColor(.blue)
+                                        .foregroundColor(AppTheme.accent)
                                 }
                             }
                         }

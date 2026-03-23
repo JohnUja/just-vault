@@ -25,10 +25,50 @@ class StoreKitService: ObservableObject {
         AppConfig.proPlusYearlyProductID
     ]
     
+    private var transactionListenerTask: Task<Void, Never>?
+
     private init() {
         Task {
             await loadProducts()
             await updatePurchasedProducts()
+        }
+        transactionListenerTask = Task.detached { [weak self] in
+            for await result in Transaction.updates {
+                guard let self else { return }
+                do {
+                    let transaction = try self.checkVerifiedNonIsolated(result)
+                    await transaction.finish()
+                    await self.updatePurchasedProducts()
+                    await self.applyTierToCurrentUser()
+                } catch {
+                    print("Transaction update verification failed: \(error)")
+                }
+            }
+        }
+    }
+
+    private nonisolated func checkVerifiedNonIsolated<T>(_ result: VerificationResult<T>) throws -> T {
+        switch result {
+        case .unverified:
+            throw StoreKitError.unverified
+        case .verified(let safe):
+            return safe
+        }
+    }
+
+    func applyTierToCurrentUser() async {
+        let tier = getCurrentSubscriptionTier()
+        guard let userId = UserDefaults.standard.string(forKey: "currentUserId"),
+              let userData = UserDefaults.standard.data(forKey: "currentUser_\(userId)"),
+              var user = try? JSONDecoder().decode(User.self, from: userData) else { return }
+
+        user.subscriptionTier = tier
+        user.subscriptionStatus = tier == .free ? .none : .active
+        user.cloudStorageQuotaBytes = tier.cloudStorageMB * 1_000_000
+
+        if let encoded = try? JSONEncoder().encode(user) {
+            UserDefaults.standard.set(encoded, forKey: "currentUser_\(userId)")
+            NotificationCenter.default.post(name: .userProfileDidChange, object: nil)
         }
     }
     
@@ -147,6 +187,29 @@ class StoreKitService: ObservableObject {
         
         return products.first { $0.id == productID }
     }
+
+    /// After a successful purchase or restore, push the resolved tier to the signed-in user and cloud profile.
+    func applyResolvedTierToUser(authService: AuthenticationService) async {
+        await updatePurchasedProducts()
+        let newTier = getCurrentSubscriptionTier()
+        guard var user = authService.currentUser else { return }
+        user.subscriptionTier = newTier
+        user.subscriptionStatus = newTier == .free ? .none : .active
+        user.cloudStorageQuotaBytes = newTier.cloudStorageMB * 1_000_000
+        authService.currentUser = user
+        try? await authService.saveUserToLocalStorage(user)
+        try? await DynamoDBService.shared.saveUserProfile(user)
+    }
+
+    func isEligibleForIntroductoryOffer(tier: SubscriptionTier, billing: BillingPeriod) async -> Bool {
+        // Product policy: trial on yearly only—never advertise or gate CTA on monthly intro eligibility.
+        guard tier != .free, billing == .yearly,
+              let product = getProduct(for: tier, billing: billing),
+              let sub = product.subscription else {
+            return false
+        }
+        return await sub.isEligibleForIntroOffer
+    }
 }
 
 // MARK: - StoreKit Errors
@@ -171,5 +234,5 @@ enum StoreKitError: LocalizedError {
     }
 }
 
-// Note: BillingPeriod is defined in OnboardingFlowView.swift
+// Note: BillingPeriod is defined in User.swift
 

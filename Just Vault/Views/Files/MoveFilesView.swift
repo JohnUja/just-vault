@@ -19,7 +19,7 @@ struct MoveFilesView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     Text("Move \(fileIds.count) file\(fileIds.count == 1 ? "" : "s") to:")

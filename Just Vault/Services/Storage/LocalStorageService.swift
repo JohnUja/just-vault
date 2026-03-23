@@ -53,6 +53,7 @@ class LocalStorageService {
     /// Delete encrypted file
     func deleteEncryptedFile(fileId: String) throws {
         let fileURL = filesDirectory.appendingPathComponent("\(fileId).enc")
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
         try fileManager.removeItem(at: fileURL)
     }
     

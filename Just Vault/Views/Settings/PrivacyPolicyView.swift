@@ -11,37 +11,29 @@ struct PrivacyPolicyView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 // Background - Bright purple/pink + white gradient (app-wide)
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.9, green: 0.5, blue: 0.9), // Bright purple/pink
-                        Color(red: 0.8, green: 0.4, blue: 0.85), // Medium purple/pink
-                        Color.white.opacity(0.9), // White
-                        Color(red: 0.85, green: 0.45, blue: 0.9).opacity(0.8) // Light purple/pink
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                AppTheme.backgroundGradient.ignoresSafeArea()
                 
                 ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     Text("Privacy Policy")
-                        .font(.system(size: 34, weight: .bold))
-                        .padding(.top)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.primary)
+                        .padding(.top, 8)
                     
-                    Text("Last Updated: \(Date().formatted(date: .long, time: .omitted))")
-                        .font(.system(size: 14))
+                    Text("Last updated: \(Date().formatted(date: .long, time: .omitted))")
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
+                        .padding(.bottom, 4)
                     
                     SectionView(title: "1. Information We Collect") {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Just Vault is designed with privacy as a core principle. We collect minimal information necessary to provide our service:")
+                            Text("\(AppConfig.appName) is designed with privacy as a core principle. We collect minimal information necessary to provide our service:")
                             
                             BulletPoint("Account Information: Your Apple ID email (if provided) and name for account management")
-                            BulletPoint("Usage Data: Basic app usage statistics to improve our service")
+                            BulletPoint("File Metadata: File names, sizes, types, timestamps, sync status, and space assignment")
                             BulletPoint("Device Information: Device type and iOS version for compatibility")
                         }
                     }
@@ -51,21 +43,21 @@ struct PrivacyPolicyView: View {
                             Text("We use the information we collect to:")
                             
                             BulletPoint("Provide and maintain our service")
-                            BulletPoint("Notify you about changes to our service")
                             BulletPoint("Provide customer support")
-                            BulletPoint("Monitor the usage of our service")
+                            BulletPoint("Maintain cloud backup and restore for paid plans")
                             BulletPoint("Detect, prevent and address technical issues")
                         }
                     }
                     
                     SectionView(title: "3. Data Storage and Security") {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Your files are encrypted locally on your device using industry-standard encryption. For Pro and Pro+ subscribers:")
+                            Text("Your files are encrypted locally on your device before cloud upload. For paid plans:")
                             
                             BulletPoint("Files are encrypted before upload to AWS S3")
                             BulletPoint("Metadata is stored in AWS DynamoDB")
                             BulletPoint("We do not have access to your encrypted files")
-                            BulletPoint("Free tier users: Files are stored locally only, never uploaded to cloud")
+                            BulletPoint("Free tier users: Files are stored locally only and are not uploaded to the cloud")
+                            BulletPoint("Cloud data for v1 is stored in the United States")
                         }
                     }
                     
@@ -74,7 +66,7 @@ struct PrivacyPolicyView: View {
                             Text("We use the following third-party services:")
                             
                             BulletPoint("Apple Sign In: For authentication (subject to Apple's Privacy Policy)")
-                            BulletPoint("AWS (Amazon Web Services): For cloud storage (Pro/Pro+ users only)")
+                            BulletPoint("AWS (Amazon Web Services): For encrypted cloud storage and metadata (paid plans only)")
                             BulletPoint("StoreKit: For in-app purchases (subject to Apple's Privacy Policy)")
                         }
                     }
@@ -85,8 +77,8 @@ struct PrivacyPolicyView: View {
                             
                             BulletPoint("Access your personal data")
                             BulletPoint("Request deletion of your account and data")
-                            BulletPoint("Opt-out of data collection (by using free tier)")
-                            BulletPoint("Export your data at any time")
+                            BulletPoint("Request deletion of cloud-backed account data")
+                            BulletPoint("Request help from support, although we cannot decrypt files for you")
                         }
                     }
                     
@@ -99,7 +91,7 @@ struct PrivacyPolicyView: View {
                     }
                     
                     SectionView(title: "8. Contact Us") {
-                        Text("If you have any questions about this Privacy Policy, please contact us through the app settings or email support.")
+                        Text("If you have any questions about this Privacy Policy, contact us at support@juvantage.com or through the Email support option in Settings.")
                     }
                 }
                 .padding()
@@ -128,13 +120,14 @@ struct SectionView<Content: View>: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.primary)
             
             content
                 .font(.system(size: 15))
-                .foregroundColor(.secondary)
+                .foregroundColor(.primary)
         }
     }
 }
@@ -149,8 +142,11 @@ struct BulletPoint: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Text("•")
-                .foregroundColor(.orange)
+                .font(.system(size: 15))
+                .foregroundColor(AppTheme.accent)
             Text(text)
+                .font(.system(size: 15))
+                .foregroundColor(.primary)
         }
     }
 }

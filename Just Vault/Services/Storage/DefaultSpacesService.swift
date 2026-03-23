@@ -20,8 +20,8 @@ class DefaultSpacesService {
     
     private init() {}
     
-    /// Pre-defined spaces configuration
-    /// Based on the image: Documents, Keys, Cards, Photos, Backup, Folders
+    /// Pre-defined spaces: clearer names for common vault use cases (documents/photos only; no "Passwords" — we're not a password manager).
+    /// Documents, IDs & Licenses, Receipts, Photos, Secure notes, Archive
     var defaultSpaces: [DefaultSpace] {
         [
             DefaultSpace(
@@ -32,15 +32,15 @@ class DefaultSpacesService {
                 orderIndex: 0
             ),
             DefaultSpace(
-                name: "Keys",
-                icon: "key.fill",
+                name: "IDs & Licenses",
+                icon: "person.text.rectangle.fill",
                 color: "#FF9500", // Orange
                 hasLockOverlay: true,
                 orderIndex: 1
             ),
             DefaultSpace(
-                name: "Cards",
-                icon: "creditcard.fill",
+                name: "Receipts",
+                icon: "receipt.fill",
                 color: "#34C759", // Green
                 hasLockOverlay: false,
                 orderIndex: 2
@@ -53,17 +53,17 @@ class DefaultSpacesService {
                 orderIndex: 3
             ),
             DefaultSpace(
-                name: "Backup",
-                icon: "icloud.and.arrow.up.fill",
+                name: "Secure notes",
+                icon: "note.text",
                 color: "#5856D6", // Indigo
-                hasLockOverlay: false,
+                hasLockOverlay: true,
                 orderIndex: 4
             ),
             DefaultSpace(
-                name: "Folders",
-                icon: "folder.fill",
+                name: "Archive",
+                icon: "archivebox.fill",
                 color: "#00C7BE", // Teal
-                hasLockOverlay: true,
+                hasLockOverlay: false,
                 orderIndex: 5
             )
         ]
@@ -87,6 +87,24 @@ class DefaultSpacesService {
     /// Check if user needs default spaces (has no spaces)
     func shouldCreateDefaults(existingSpaces: [Space]) -> Bool {
         return existingSpaces.isEmpty
+    }
+
+    /// Returns the first missing default space (by name) for a given user,
+    /// preserving the original orderIndex so it appears in the correct ring slot.
+    func nextMissingDefault(existingSpaces: [Space], userId: String) -> Space? {
+        let existingOrderIndexes = Set(existingSpaces.map(\.orderIndex))
+        guard let missing = defaultSpaces.first(where: { !existingOrderIndexes.contains($0.orderIndex) }) else {
+            return nil
+        }
+        return Space.create(
+            id: UUID().uuidString,
+            userId: userId,
+            name: missing.name,
+            icon: missing.icon,
+            color: missing.color,
+            isLocked: false,
+            orderIndex: missing.orderIndex
+        )
     }
 }
 

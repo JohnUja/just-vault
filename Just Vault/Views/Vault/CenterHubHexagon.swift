@@ -7,123 +7,129 @@
 
 import SwiftUI
 
-/// Central Vault Hub - The main control center for all vault operations
 struct CenterHubHexagon: View {
     @Binding var showSettings: Bool
     @Binding var showSearch: Bool
     @Binding var showUpgrade: Bool
+    var hubHexSide: CGFloat = 120
     let isPro: Bool
-    let syncStatus: SyncStatus  // Sync status instead of boolean
-    let totalFiles: Int  // Total file count
-    let onLockAll: () -> Void
-    let onSyncNow: () -> Void  // Sync now action
+    let allSpacesLocked: Bool
+    let syncStatus: SyncStatus
+    let totalFiles: Int
+    let onToggleLockAll: () -> Void
+    let onSyncNow: () -> Void
     
-    @State private var pulseScale: CGFloat = 1.0
+    @State private var pulseOpacity: CGFloat = 0.6
+
+    private var s: CGFloat { hubHexSide / 120 }
     
     var body: some View {
         ZStack {
-            // Outer glow ring
+            // Outer soft glow
             HexagonShape()
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color.gray.opacity(0.2),
-                            Color.gray.opacity(0.05),
+                            AppTheme.accent.opacity(0.12),
                             Color.clear
                         ],
                         center: .center,
                         startRadius: 0,
-                        endRadius: 70
+                        endRadius: 75 * s
                     )
                 )
-                .frame(width: 140, height: 140)
-                .blur(radius: 15)
+                .frame(width: 150 * s, height: 150 * s)
+                .blur(radius: 18 * s)
             
-            // Main hexagon
+            // Main hex body
             HexagonShape()
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(uiColor: .systemGray5),
-                            Color(uiColor: .systemGray6)
+                            Color(red: 0.96, green: 0.955, blue: 0.945),
+                            Color(red: 0.92, green: 0.915, blue: 0.90)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 120, height: 120)
+                .frame(width: hubHexSide, height: hubHexSide)
+                .overlay(
+                    HexagonShape()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.35), Color.clear],
+                                startPoint: .top,
+                                endPoint: .center
+                            )
+                        )
+                )
                 .overlay(
                     HexagonShape()
                         .stroke(
                             LinearGradient(
-                                colors: [Color.white.opacity(0.4), Color.white.opacity(0.1)],
+                                colors: [
+                                    AppTheme.accent.opacity(0.5),
+                                    AppTheme.accent.opacity(0.2)
+                                ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            style: StrokeStyle(lineWidth: 2)
+                            style: StrokeStyle(lineWidth: 1.5 * s)
                         )
                 )
-                .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
+                .shadow(color: AppTheme.accent.opacity(0.15), radius: 12 * s, x: 0, y: 6 * s)
+                .shadow(color: Color.black.opacity(0.06), radius: 4 * s, x: 0, y: 2 * s)
             
-            // Content - File count and sync status
-            VStack(spacing: 8) {
-                // File count
-                if totalFiles > 0 {
-                    VStack(spacing: 2) {
-                        Text("\(totalFiles)")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(.primary)
-                        
-                        Text(totalFiles == 1 ? "file" : "files")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                } else {
-                    Text("0 files")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
+            // Content
+            VStack(spacing: 6 * s) {
+                VStack(spacing: 1) {
+                    Text("\(totalFiles)")
+                        .font(.system(size: 22 * s, weight: .bold, design: .rounded))
+                        .foregroundColor(AppTheme.headerTint)
+                    
+                    Text(totalFiles == 1 ? "file" : "files")
+                        .font(.system(size: 10 * s, weight: .medium))
+                        .foregroundColor(AppTheme.secondaryText)
                 }
                 
-                // Sync status with indicator
-                HStack(spacing: 6) {
-                    // Status text (to the left of dot)
+                // Lock state pill
+                Text(allSpacesLocked ? "all locked" : "vault open")
+                    .font(.system(size: 9 * s, weight: .semibold))
+                    .foregroundColor(allSpacesLocked ? .white : AppTheme.secondaryText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(allSpacesLocked ? AppTheme.accent : AppTheme.background.opacity(0.8))
+                    )
+                
+                // Sync indicator
+                HStack(spacing: 4 * s) {
                     Text(syncStatusText)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 9 * s, weight: .medium))
+                        .foregroundColor(AppTheme.secondaryText)
                     
-                    // Sync indicator dot with pulse and glow (stationary, only opacity changes)
                     Circle()
                         .fill(syncIndicatorColor)
-                        .frame(width: 8, height: 8)
-                        .overlay(
-                            Circle()
-                                .stroke(syncIndicatorColor.opacity(0.6), lineWidth: 1.5)
-                        )
-                        .shadow(color: syncIndicatorColor.opacity(0.8), radius: 4)
-                        .opacity(pulseScale > 1.0 ? 1.0 : 0.6)
-                        .animation(
-                            Animation.easeInOut(duration: 1.5)
-                                .repeatForever(autoreverses: true),
-                            value: pulseScale
-                        )
+                        .frame(width: 7 * s, height: 7 * s)
+                        .shadow(color: syncIndicatorColor.opacity(0.6), radius: 3)
+                        .opacity(pulseOpacity)
                 }
             }
         }
         .onAppear {
-            // Start pulse animation (opacity only, not scale)
             withAnimation(
                 Animation.easeInOut(duration: 1.5)
                     .repeatForever(autoreverses: true)
             ) {
-                pulseScale = 1.3
+                pulseOpacity = 1.0
             }
         }
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.5)
                 .onEnded { _ in
-                    // Haptic feedback
-                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                    impactFeedback.impactOccurred()
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
         )
         .contextMenu {
@@ -131,8 +137,9 @@ struct CenterHubHexagon: View {
                 Label("Search", systemImage: "magnifyingglass")
             }
             
-            Button(action: onLockAll) {
-                Label("Lock All Vaults", systemImage: "lock.fill")
+            Button(action: onToggleLockAll) {
+                Label(allSpacesLocked ? "Unlock All Vaults" : "Lock All Vaults",
+                      systemImage: allSpacesLocked ? "lock.open.fill" : "lock.fill")
             }
             
             Button(action: { showSettings = true }) {
@@ -145,41 +152,25 @@ struct CenterHubHexagon: View {
         }
     }
     
-    // Sync status text
     private var syncStatusText: String {
-        if !isPro {
-            return "not synced"
-        }
-        
+        if !isPro { return "local only" }
         switch syncStatus {
-        case .synced:
-            return "synced"
-        case .syncing:
-            return "syncing"
-        case .pending:
-            return "syncing"
-        case .error:
-            return "not synced"
+        case .synced:  return "synced"
+        case .syncing: return "syncing"
+        case .pending: return "syncing"
+        case .error:   return "not synced"
+        case .localOnly: return "local only"
         }
     }
     
-    // Sync indicator color based on status
-    // Red if not backed up (error or no cloud), Yellow if syncing/pending, Green if synced
     private var syncIndicatorColor: Color {
-        // If user is not Pro, they don't have cloud backup - show red
-        if !isPro {
-            return .red
-        }
-        
+        if !isPro { return AppTheme.secondaryText }
         switch syncStatus {
-        case .synced:
-            return .green
-        case .syncing:
-            return .yellow
-        case .pending:
-            return .yellow
-        case .error:
-            return .red
+        case .synced:  return AppTheme.success
+        case .syncing: return AppTheme.warning
+        case .pending: return AppTheme.warning
+        case .error:   return AppTheme.error
+        case .localOnly: return AppTheme.secondaryText
         }
     }
 }
@@ -195,13 +186,7 @@ struct HubButton: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(color)
                 .frame(width: 32, height: 32)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.2))
-                )
+                .background(Circle().fill(AppTheme.background.opacity(0.6)))
         }
     }
 }
-
-
-

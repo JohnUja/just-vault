@@ -22,31 +22,38 @@ class DynamoDBService {
     // MARK: - Client Initialization
     
     func initializeClient() async throws {
-        // Get credentials from CredentialManager (credentials will be used by SDK's default provider)
-        let _ = try await credentialManager.getCredentials()
+        let credentials = try await credentialManager.getCredentials()
         
-        // Create DynamoDB client configuration
-        // AWS SDK for Swift v1 uses default credential provider chain
-        // Credentials will be provided via environment or default chain
-        // For now, create client with region - credentials will be handled by SDK
-        let config = try await DynamoDBClient.DynamoDBClientConfiguration(
+        // This AWS SDK build only exposes the default credential chain configuration surface.
+        // Populate the chain from the Cognito-issued credentials we stored in CredentialManager.
+        setenv("AWS_ACCESS_KEY_ID", credentials.accessKeyId, 1)
+        setenv("AWS_SECRET_ACCESS_KEY", credentials.secretAccessKey, 1)
+        if let sessionToken = credentials.sessionToken, !sessionToken.isEmpty {
+            setenv("AWS_SESSION_TOKEN", sessionToken, 1)
+        } else {
+            unsetenv("AWS_SESSION_TOKEN")
+        }
+        setenv("AWS_DEFAULT_REGION", region, 1)
+        setenv("AWS_REGION", region, 1)
+        
+        let config = try await DynamoDBClient.DynamoDBClientConfig(
             region: region
         )
         
         client = DynamoDBClient(config: config)
-        
-        // Note: In production, you may need to configure credentials explicitly
-        // The SDK should pick up credentials from the default provider chain
-        // If needed, we can set credentials via environment variables or config file
+    }
+
+    /// Call on sign out so the next DynamoDB call uses fresh credentials after sign in. Otherwise recovery questions and wrapped key load can use stale credentials and return nil.
+    func clearClient() {
+        client = nil
     }
     
     // MARK: - User Profile Operations
     
-    func saveUserProfile(_ user: User) async throws {
-        try await ensureClientInitialized()
+    func saveUserProfile(_ user: User, wrappedMasterKey: Data? = nil) async throws {
+        try await ensureClientInitialized(requirePro: false)
         
-        // Create DynamoDB item
-        let item: [String: DynamoDBClientTypes.AttributeValue] = [
+        var item: [String: DynamoDBClientTypes.AttributeValue] = [
             "PK": .s("USER#\(user.id)"),
             "SK": .s("PROFILE"),
             "id": .s(user.id),
@@ -58,8 +65,30 @@ class DynamoDBService {
             "subscriptionTier": .s(user.subscriptionTier.rawValue),
             "subscriptionStatus": .s(user.subscriptionStatus.rawValue),
             "cloudStorageUsedBytes": .n(String(user.cloudStorageUsedBytes)),
-            "cloudStorageQuotaBytes": .n(String(user.cloudStorageQuotaBytes))
+            "cloudStorageQuotaBytes": .n(String(user.cloudStorageQuotaBytes)),
+            "lastSyncAt": user.lastSyncAt.map { .s(ISO8601DateFormatter().string(from: $0)) } ?? .null(true)
         ]
+        if let wrapped = wrappedMasterKey {
+            item["wrappedMasterKey"] = .s(wrapped.base64EncodedString())
+        }
+        
+        // Preserve recovery-question attributes so profile saves (sync, tier, name, etc.) never wipe them.
+        let getInput = GetItemInput(
+            key: ["PK": .s("USER#\(user.id)"), "SK": .s("PROFILE")],
+            tableName: tableName
+        )
+        let getResponse = try await client?.getItem(input: getInput)
+        if let existing = getResponse?.item {
+            let recoveryKeys = [
+                "recoveryQuestion1", "recoveryQuestion2", "recoveryQuestion3",
+                "wrappedMasterKeyByRecovery1", "wrappedMasterKeyByRecovery2", "wrappedMasterKeyByRecovery3"
+            ]
+            for key in recoveryKeys {
+                if let value = existing[key] {
+                    item[key] = value
+                }
+            }
+        }
         
         let input = PutItemInput(
             item: item,
@@ -69,8 +98,81 @@ class DynamoDBService {
         _ = try await client?.putItem(input: input)
     }
     
+    /// Load only the wrapped master key for recovery (not part of in-memory User).
+    func loadWrappedMasterKey(userId: String) async throws -> Data? {
+        try await ensureClientInitialized(requirePro: false)
+        let input = GetItemInput(
+            key: [
+                "PK": .s("USER#\(userId)"),
+                "SK": .s("PROFILE")
+            ],
+            tableName: tableName
+        )
+        let response = try await client?.getItem(input: input)
+        guard let item = response?.item,
+              let attr = item["wrappedMasterKey"],
+              case .s(let base64) = attr,
+              !base64.isEmpty,
+              let data = Data(base64Encoded: base64) else {
+            return nil
+        }
+        return data
+    }
+
+    /// Recovery questions (retrieval mode): 3 question texts + 3 wrapped master-key blobs.
+    struct RecoveryQuestionsData {
+        let questions: [String]  // count 3
+        let wrappedBlobs: [Data] // count 3
+    }
+
+    func saveRecoveryQuestions(userId: String, questions: [String], wrappedBlobs: [Data]) async throws {
+        try await ensureClientInitialized(requirePro: false)
+        guard questions.count == 3, wrappedBlobs.count == 3 else { return }
+        let input = GetItemInput(
+            key: ["PK": .s("USER#\(userId)"), "SK": .s("PROFILE")],
+            tableName: tableName
+        )
+        let response = try await client?.getItem(input: input)
+        guard var item = response?.item else { throw DynamoDBError.cloudSaveFailed }
+        item["recoveryQuestion1"] = .s(questions[0])
+        item["recoveryQuestion2"] = .s(questions[1])
+        item["recoveryQuestion3"] = .s(questions[2])
+        item["wrappedMasterKeyByRecovery1"] = .s(wrappedBlobs[0].base64EncodedString())
+        item["wrappedMasterKeyByRecovery2"] = .s(wrappedBlobs[1].base64EncodedString())
+        item["wrappedMasterKeyByRecovery3"] = .s(wrappedBlobs[2].base64EncodedString())
+        let putInput = PutItemInput(item: item, tableName: tableName)
+        _ = try await client?.putItem(input: putInput)
+    }
+
+    func loadRecoveryQuestions(userId: String) async throws -> RecoveryQuestionsData? {
+        try await ensureClientInitialized(requirePro: false)
+        let input = GetItemInput(
+            key: ["PK": .s("USER#\(userId)"), "SK": .s("PROFILE")],
+            tableName: tableName
+        )
+        let response = try await client?.getItem(input: input)
+        guard let item = response?.item else { return nil }
+        func str(_ attr: DynamoDBClientTypes.AttributeValue?) -> String? {
+            guard let a = attr, case .s(let v) = a else { return nil }
+            return v
+        }
+        guard let q1 = str(item["recoveryQuestion1"]), !q1.isEmpty,
+              let q2 = str(item["recoveryQuestion2"]), !q2.isEmpty,
+              let q3 = str(item["recoveryQuestion3"]), !q3.isEmpty,
+              let b1 = str(item["wrappedMasterKeyByRecovery1"]), !b1.isEmpty,
+              let b2 = str(item["wrappedMasterKeyByRecovery2"]), !b2.isEmpty,
+              let b3 = str(item["wrappedMasterKeyByRecovery3"]), !b3.isEmpty,
+              let d1 = Data(base64Encoded: b1),
+              let d2 = Data(base64Encoded: b2),
+              let d3 = Data(base64Encoded: b3) else {
+            return nil
+        }
+        return RecoveryQuestionsData(questions: [q1, q2, q3], wrappedBlobs: [d1, d2, d3])
+    }
+
     func loadUserProfile(userId: String) async throws -> User? {
-        try await ensureClientInitialized()
+        // User profile restore must work after reinstall / post-delete recovery, before we know the tier.
+        try await ensureClientInitialized(requirePro: false)
         
         let input = GetItemInput(
             key: [
@@ -236,17 +338,46 @@ class DynamoDBService {
     }
     
     // MARK: - Helper Methods
-    
-    private func ensureClientInitialized() async throws {
-        // Check if user has cloud backup enabled (not free tier)
-        // For free users, we should not initialize AWS services
-        if !shouldUseCloudSync() {
+
+    /// When true, ensureClientInitialized skips the Pro check (for account deletion using current credentials).
+    private static var accountDeletionInProgress = false
+
+    /// If requirePro is false, allow DynamoDB for auth/recovery (profile, recovery questions) even when user is free tier (e.g. post–account-deletion recovery setup).
+    private func ensureClientInitialized(requirePro: Bool = true) async throws {
+        if requirePro && !Self.accountDeletionInProgress && !shouldUseCloudSync() {
             throw DynamoDBError.cloudSyncNotAvailable
         }
-        
         if client == nil {
             try await initializeClient()
         }
+    }
+
+    /// Delete all cloud data for a user (profile, spaces, file metadata, and S3 objects). Uses current credentials; call from Delete Account flow only.
+    func deleteAllUserCloudData(userId: String) async throws {
+        Self.accountDeletionInProgress = true
+        S3Service.accountDeletionInProgress = true
+        defer {
+            Self.accountDeletionInProgress = false
+            S3Service.accountDeletionInProgress = false
+        }
+        try await ensureClientInitialized()
+        // Wipe all S3 objects under this user's prefix (catches any orphans not in DynamoDB)
+        try? await S3Service.shared.deleteAllObjects(prefix: "users/\(userId)/")
+        let files = (try? await loadAllFiles(userId: userId)) ?? []
+        for file in files {
+            try? await S3Service.shared.deleteFile(key: file.s3Key)
+            if let thumb = file.thumbnailS3Key { try? await S3Service.shared.deleteFile(key: thumb) }
+            try? await deleteFileMetadata(userId: userId, fileId: file.id)
+        }
+        let spaces = (try? await loadSpaces(userId: userId)) ?? []
+        for space in spaces {
+            try? await deleteSpace(userId: userId, spaceId: space.id)
+        }
+        let input = DeleteItemInput(
+            key: ["PK": .s("USER#\(userId)"), "SK": .s("PROFILE")],
+            tableName: tableName
+        )
+        _ = try await client?.deleteItem(input: input)
     }
     
     /// Check if cloud sync should be used (user must be Pro or Pro+)
@@ -311,7 +442,8 @@ class DynamoDBService {
             subscriptionTier: subscriptionTier,
             subscriptionStatus: subscriptionStatus,
             cloudStorageUsedBytes: usedBytes,
-            cloudStorageQuotaBytes: quotaBytes
+            cloudStorageQuotaBytes: quotaBytes,
+            lastSyncAt: extractString(item["lastSyncAt"]).flatMap { ISO8601DateFormatter().date(from: $0) }
         )
     }
     
@@ -450,7 +582,8 @@ enum DynamoDBError: LocalizedError {
     case invalidData
     case clientNotInitialized
     case cloudSyncNotAvailable
-    
+    case cloudSaveFailed
+
     var errorDescription: String? {
         switch self {
         case .invalidData:
@@ -459,6 +592,8 @@ enum DynamoDBError: LocalizedError {
             return "DynamoDB client not initialized"
         case .cloudSyncNotAvailable:
             return "Cloud sync is only available for Pro and Pro+ subscribers"
+        case .cloudSaveFailed:
+            return "Could not save to cloud"
         }
     }
 }

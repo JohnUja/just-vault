@@ -22,20 +22,25 @@ class S3Service {
     // MARK: - Client Initialization
     
     func initializeClient() async throws {
-        // Get credentials from CredentialManager (credentials will be used by SDK's default provider)
-        let _ = try await credentialManager.getCredentials()
+        let credentials = try await credentialManager.getCredentials()
         
-        // Create S3 client configuration
-        // AWS SDK for Swift v1 uses default credential provider chain
-        // Credentials will be provided via environment or default chain
-        let config = try await S3Client.S3ClientConfiguration(
+        // This AWS SDK build only exposes the default credential chain configuration surface.
+        // Populate the chain from the Cognito-issued credentials we stored in CredentialManager.
+        setenv("AWS_ACCESS_KEY_ID", credentials.accessKeyId, 1)
+        setenv("AWS_SECRET_ACCESS_KEY", credentials.secretAccessKey, 1)
+        if let sessionToken = credentials.sessionToken, !sessionToken.isEmpty {
+            setenv("AWS_SESSION_TOKEN", sessionToken, 1)
+        } else {
+            unsetenv("AWS_SESSION_TOKEN")
+        }
+        setenv("AWS_DEFAULT_REGION", region, 1)
+        setenv("AWS_REGION", region, 1)
+        
+        let config = try await S3Client.S3ClientConfig(
             region: region
         )
         
         client = S3Client(config: config)
-        
-        // Note: In production, you may need to configure credentials explicitly
-        // The SDK should pick up credentials from the default provider chain
     }
     
     // MARK: - Upload Operations
@@ -50,6 +55,7 @@ class S3Service {
         )
         
         _ = try await client?.putObject(input: input)
+        print("[S3] Uploaded \(data.count) bytes -> s3://\(bucketName)/\(key)")
     }
     
     func uploadFileWithProgress(data: Data, key: String, progressHandler: @escaping (Double) -> Void) async throws {
@@ -74,55 +80,13 @@ class S3Service {
         guard let body = response?.body else {
             throw S3Error.downloadFailed
         }
-        
-        // Convert body to Data
-        switch body {
-        case .data(let data):
-            // Unwrap optional data or throw error
-            guard let data = data else {
-                throw S3Error.downloadFailed
-            }
-            return data
-        case .stream(let stream):
-            // Read stream into Data
-            // Note: AWS SDK for Swift v1 stream handling
-            // The stream type may need to be converted or read differently
-            // This is a placeholder implementation - adjust based on actual SDK structure
-            
-            // Try to read stream as AsyncSequence
-            // The actual stream type from AWS SDK may conform to AsyncSequence differently
-            var data = Data()
-            
-            // Attempt to iterate over stream
-            // If the SDK stream type has a different API, this will need adjustment
-            do {
-                // Try casting to AsyncSequence protocol
-                // The actual type may be different - check SDK documentation
-                if let asyncSequence = stream as? any AsyncSequence {
-                    for try await chunk in asyncSequence {
-                        // Handle different chunk types
-                        if let chunkData = chunk as? Data {
-                            data.append(chunkData)
-                        } else if let chunkBytes = chunk as? [UInt8] {
-                            data.append(contentsOf: chunkBytes)
-                        } else if let chunkByte = chunk as? UInt8 {
-                            data.append(chunkByte)
-                        }
-                    }
-                } else {
-                    // Stream doesn't conform to AsyncSequence
-                    // May need to use SDK-specific stream reading API
-                    // For now, throw error - this needs SDK-specific implementation
-                    throw S3Error.downloadFailed
-                }
-            } catch {
-                throw S3Error.downloadFailed
-            }
-            
-            return data
-        default:
+
+        // Let the SDK normalize either in-memory or streamed response bodies.
+        guard let data = try await body.readData() else {
             throw S3Error.downloadFailed
         }
+        print("[S3] Downloaded \(data.count) bytes <- s3://\(bucketName)/\(key)")
+        return data
     }
     
     // MARK: - Delete Operations
@@ -138,15 +102,34 @@ class S3Service {
         _ = try await client?.deleteObject(input: input)
     }
     
-    // MARK: - Helper Methods
+    /// Delete all S3 objects under a prefix (e.g. users/<userId>/). Used for account deletion to remove any objects even if not in DynamoDB.
+    func deleteAllObjects(prefix: String) async throws {
+        try await ensureClientInitialized()
+        var continuationToken: String? = nil
+        repeat {
+            let input = ListObjectsV2Input(
+                bucket: bucketName,
+                continuationToken: continuationToken,
+                prefix: prefix
+            )
+            let response = try await client?.listObjectsV2(input: input)
+            let keys = (response?.contents ?? []).compactMap { $0.key }
+            for key in keys {
+                try? await client?.deleteObject(input: DeleteObjectInput(bucket: bucketName, key: key))
+            }
+            continuationToken = response?.nextContinuationToken
+        } while continuationToken != nil
+    }
     
+    // MARK: - Helper Methods
+
+    /// When true, ensureClientInitialized skips the Pro check (for account deletion).
+    static var accountDeletionInProgress = false
+
     private func ensureClientInitialized() async throws {
-        // Check if user has cloud backup enabled (not free tier)
-        // For free users, we should not initialize AWS services
-        if !shouldUseCloudSync() {
+        if !Self.accountDeletionInProgress && !shouldUseCloudSync() {
             throw S3Error.cloudSyncNotAvailable
         }
-        
         if client == nil {
             try await initializeClient()
         }

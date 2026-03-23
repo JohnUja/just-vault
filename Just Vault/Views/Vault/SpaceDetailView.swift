@@ -16,6 +16,16 @@ class SpaceDetailViewModel: ObservableObject {
     @Published var files: [VaultFile] = []
     @Published var isImporting = false
     @Published var isLocked: Bool
+    @Published var importError: String?
+
+    var userTier: SubscriptionTier {
+        guard let userId = UserDefaults.standard.string(forKey: "currentUserId"),
+              let data = UserDefaults.standard.data(forKey: "currentUser_\(userId)"),
+              let user = try? JSONDecoder().decode(User.self, from: data) else {
+            return .free
+        }
+        return user.effectiveTier
+    }
 
     init(space: Space) {
         self.space = space
@@ -24,6 +34,11 @@ class SpaceDetailViewModel: ObservableObject {
     }
 
     func unlockSpace() async {
+        if !AppPreferences.faceIDEnabled {
+            isLocked = false
+            return
+        }
+
         let context = LAContext()
         var error: NSError?
 
@@ -57,6 +72,11 @@ class SpaceDetailViewModel: ObservableObject {
         Task { await loadFilesAsync() }
     }
 
+    /// Call from view when vault files change (e.g. after sync) so file list and sync badges refresh.
+    func refreshFilesFromNotification() {
+        Task { await loadFilesAsync() }
+    }
+
     private func loadFilesAsync() async {
         do {
             let localFiles = try LocalFileMetadataService.shared.loadFilesForSpace(
@@ -79,9 +99,11 @@ class SpaceDetailViewModel: ObservableObject {
             }
 
             await MainActor.run {
-                let existingIds = Set(files.map { $0.id })
-                let newFiles = cloudFiles.filter { !existingIds.contains($0.id) }
-                files.append(contentsOf: newFiles)
+                var mergedById = Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0) })
+                for file in cloudFiles {
+                    mergedById[file.id] = file
+                }
+                files = Array(mergedById.values)
             }
         } catch {
             print("Cloud sync not available: \(error.localizedDescription)")
@@ -93,6 +115,26 @@ class SpaceDetailViewModel: ObservableObject {
         defer { isImporting = false }
 
         do {
+            let tier = userTier
+            let limit = tier.maxFileSizeBytes
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            let fileSize = (attrs[.size] as? Int64) ?? 0
+            if fileSize > limit {
+                await MainActor.run {
+                    importError = "File exceeds \(tier.maxFileSizeMB) MB limit for \(tier.displayName) plan. \(tier == .free ? "Upgrade to Pro for 100 MB." : tier == .pro ? "Upgrade to Pro+ for 500 MB." : "")"
+                }
+                return
+            }
+
+            let ext = url.pathExtension.lowercased()
+            let videoExts = ["mov", "mp4", "m4v", "avi", "mkv", "wmv", "webm"]
+            if videoExts.contains(ext) {
+                await MainActor.run {
+                    importError = "Video files are not supported in this version."
+                }
+                return
+            }
+
             let vaultFile = try await FileImportService.shared.importFile(
                 url: url,
                 spaceId: space.id,
@@ -102,39 +144,51 @@ class SpaceDetailViewModel: ObservableObject {
             try LocalFileMetadataService.shared.saveFileMetadata(vaultFile, userId: space.userId)
 
             do {
+                if AppPreferences.cloudBackupEnabled {
                 try await DynamoDBService.shared.saveFileMetadata(vaultFile)
                 SyncService.shared.queueFileForSync(vaultFile)
+                }
             } catch {
-                print("File saved locally only (free tier): \(error.localizedDescription)")
+                print("File saved locally only: \(error.localizedDescription)")
             }
 
             await MainActor.run { files.append(vaultFile) }
             await loadFilesAsync()
         } catch {
-            print("Failed to import file: \(error.localizedDescription)")
+            await MainActor.run {
+                importError = "Failed to import: \(error.localizedDescription)"
+            }
         }
     }
 
     func deleteFile(_ file: VaultFile) async {
-        do {
             let localStorage = LocalStorageService()
-            try localStorage.deleteEncryptedFile(fileId: file.id)
+        try? localStorage.deleteEncryptedFile(fileId: file.id)
 
             let thumbnailId = "\(file.id)_thumb"
             try? localStorage.deleteEncryptedFile(fileId: thumbnailId)
 
             try? await DynamoDBService.shared.deleteFileMetadata(userId: file.userId, fileId: file.id)
+        LocalFileMetadataService.shared.deleteFileMetadata(fileId: file.id, userId: file.userId, spaceId: file.spaceId)
 
             try? await S3Service.shared.deleteFile(key: file.s3Key)
             if let thumbnailKey = file.thumbnailS3Key {
                 try? await S3Service.shared.deleteFile(key: thumbnailKey)
             }
 
+        await SyncService.shared.reconcileCloudStateNow(lastSyncAt: Date())
+
             await MainActor.run {
                 files.removeAll { $0.id == file.id }
             }
+    }
+
+    func removeFileFromCloud(_ file: VaultFile) async {
+        do {
+            try await SyncService.shared.removeFileFromCloud(file)
+            await loadFilesAsync()
         } catch {
-            print("Failed to delete file: \(error.localizedDescription)")
+            print("Failed to remove file from cloud: \(error.localizedDescription)")
         }
     }
 
@@ -159,6 +213,11 @@ class SpaceDetailViewModel: ObservableObject {
                 thumbnailS3Key: file.thumbnailS3Key
             )
 
+            try? LocalFileMetadataService.shared.updateFileMetadata(
+                updatedFile,
+                userId: file.userId,
+                oldSpaceId: file.spaceId
+            )
             try? await DynamoDBService.shared.saveFileMetadata(updatedFile)
 
             await MainActor.run {
@@ -170,27 +229,79 @@ class SpaceDetailViewModel: ObservableObject {
 
         await loadFilesAsync()
     }
+    
+    func renameFile(_ file: VaultFile, to newDisplayName: String) async {
+        let trimmedName = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        
+        let renamedFile = VaultFile(
+            id: file.id,
+            userId: file.userId,
+            spaceId: file.spaceId,
+            displayName: trimmedName,
+            sizeBytes: file.sizeBytes,
+            mimeType: file.mimeType,
+            createdAt: file.createdAt,
+            lastOpenedAt: file.lastOpenedAt,
+            starred: file.starred,
+            localPath: file.localPath,
+            s3Key: file.s3Key,
+            syncStatus: file.syncStatus,
+            version: file.version + 1,
+            thumbnailS3Key: file.thumbnailS3Key
+        )
+        
+        try? LocalFileMetadataService.shared.updateFileMetadata(renamedFile, userId: file.userId)
+        try? await DynamoDBService.shared.saveFileMetadata(renamedFile)
+        
+        await MainActor.run {
+            if let index = files.firstIndex(where: { $0.id == file.id }) {
+                files[index] = renamedFile
+            }
+        }
+    }
 }
 
 // MARK: - View
 
 struct SpaceDetailView: View {
     let space: Space
+    let allSpaces: [Space]
     @StateObject private var viewModel: SpaceDetailViewModel
     @Environment(\.dismiss) var dismiss
 
     @State private var showDocumentPicker = false
     @State private var showImagePicker = false
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
-
-    @State private var selectedFiles: Set<String> = []
     @State private var showMoveSheet = false
-
     @State private var fileToDelete: VaultFile?
+    @State private var fileToMove: VaultFile?
+    @State private var fileToRename: VaultFile?
+    @State private var renameText = ""
+    @State private var previewFile: VaultFile?
     @State private var showDeleteConfirmation = false
+    @State private var viewMode: VaultFileBrowserMode = .grid
+    @State private var sortOption: FileSortOption = .date
+    @State private var sortDirection: SortDirection = .descending
+    @State private var cloudFilter: CloudFilterOption = .all
 
-    init(space: Space) {
+    private var isPro: Bool {
+        guard let userId = UserDefaults.standard.string(forKey: "currentUserId"),
+              let data = UserDefaults.standard.data(forKey: "currentUser_\(userId)"),
+              let user = try? JSONDecoder().decode(User.self, from: data) else { return false }
+        return user.isPro
+    }
+
+    private var hasCloudBackup: Bool {
+        guard let userId = UserDefaults.standard.string(forKey: "currentUserId"),
+              let data = UserDefaults.standard.data(forKey: "currentUser_\(userId)"),
+              let user = try? JSONDecoder().decode(User.self, from: data) else { return false }
+        return user.hasCloudBackup
+    }
+
+    init(space: Space, allSpaces: [Space] = []) {
         self.space = space
+        self.allSpaces = allSpaces
         _viewModel = StateObject(wrappedValue: SpaceDetailViewModel(space: space))
     }
 
@@ -205,11 +316,21 @@ struct SpaceDetailView: View {
         .navigationBarHidden(true)
         .sheet(isPresented: $showDocumentPicker) {
             DocumentPicker(
-                allowedContentTypes: [.pdf, .jpeg, .png, .heic],
+                allowedContentTypes: viewModel.userTier.allowedContentTypes,
                 onDocumentPicked: { url in
+                    showDocumentPicker = false
                     Task { await viewModel.importFile(from: url) }
-                }
+                },
+                onCancel: { showDocumentPicker = false }
             )
+        }
+        .alert("Import Error", isPresented: Binding(
+            get: { viewModel.importError != nil },
+            set: { if !$0 { viewModel.importError = nil } }
+        )) {
+            Button("OK") { viewModel.importError = nil }
+        } message: {
+            Text(viewModel.importError ?? "")
         }
         .sheet(isPresented: $showImagePicker) {
             ImagePicker(
@@ -217,13 +338,17 @@ struct SpaceDetailView: View {
                 onImagePicked: { image in
                     Task {
                         if let imageData = image.jpegData(compressionQuality: 0.8) {
+                            let formatter = DateFormatter()
+                            formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+                            let fileName = "Photo \(formatter.string(from: Date())).jpg"
                             let tempURL = FileManager.default.temporaryDirectory
-                                .appendingPathComponent("\(UUID().uuidString).jpg")
+                                .appendingPathComponent(fileName)
                             try? imageData.write(to: tempURL)
                             await viewModel.importFile(from: tempURL)
                         }
                     }
-                }
+                },
+                onCancel: { showImagePicker = false }
             )
         }
         .alert("Delete File", isPresented: $showDeleteConfirmation) {
@@ -241,70 +366,101 @@ struct SpaceDetailView: View {
                 Text("Are you sure you want to delete '\(file.displayName)'? This action cannot be undone.")
             }
         }
+        .alert("Rename File", isPresented: Binding(
+            get: { fileToRename != nil },
+            set: { if !$0 { fileToRename = nil } }
+        )) {
+            TextField("File name", text: $renameText)
+            Button("Save") {
+                guard let file = fileToRename else { return }
+                Task {
+                    await viewModel.renameFile(file, to: renameText)
+                    fileToRename = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                fileToRename = nil
+            }
+        } message: {
+            Text("Choose a new display name for this file.")
+        }
         .sheet(isPresented: $showMoveSheet) {
             MoveFilesView(
-                fileIds: Array(selectedFiles),
+                fileIds: fileToMove.map { [$0.id] } ?? [],
                 currentSpace: space,
-                allSpaces: [],
+                allSpaces: allSpaces,
                 onMove: { targetSpaceId in
+                    guard let file = fileToMove else { return }
                     Task {
-                        await viewModel.moveFiles(Array(selectedFiles), to: targetSpaceId)
-                        selectedFiles.removeAll()
+                        await viewModel.moveFiles([file.id], to: targetSpaceId)
+                        fileToMove = nil
                     }
                 }
             )
         }
+        .sheet(item: $previewFile) { file in
+            FilePreviewView(file: file)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultFilesDidChange)) { _ in
+            viewModel.refreshFilesFromNotification()
+        }
     }
 
     private var lockedView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: space.icon)
+                .font(.system(size: 44, weight: .light))
+                .foregroundColor(Color(hex: space.color).opacity(0.7))
+                .padding(24)
+                .background(
+                    Circle()
+                        .fill(Color(hex: space.color).opacity(0.1))
+                        .overlay(
+                            Circle()
+                                .stroke(Color(hex: space.color).opacity(0.2), lineWidth: 1)
+                        )
+                )
+
             Image(systemName: "lock.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.orange)
+                .font(.system(size: 18))
+                .foregroundColor(AppTheme.secondaryText)
+                .padding(.top, 4)
 
-            Text("Space Locked")
-                .font(.system(size: 24, weight: .bold))
+            Text("\(space.name) is locked")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(AppTheme.headerTint)
 
-            Text("This space is locked. Unlock to access files.")
-                .font(.system(size: 16))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            Text("Authenticate to access your files")
+                .font(.system(size: 14))
+                .foregroundColor(AppTheme.secondaryText)
 
             Button {
                 Task { await viewModel.unlockSpace() }
             } label: {
-                Text("Unlock Now")
-                    .font(.system(size: 18, weight: .semibold))
+                HStack(spacing: 8) {
+                    Image(systemName: "faceid")
+                        .font(.system(size: 16))
+                    Text("Unlock")
+                        .font(.system(size: 15, weight: .semibold))
+                }
                     .foregroundColor(.white)
-                    .frame(maxWidth: 200)
-                    .padding(.vertical, 16)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 0.32, green: 0.08, blue: 0.42), Color(red: 0.38, green: 0.1, blue: 0.48)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .cornerRadius(25)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 12)
+                .background(AppTheme.accentGradient)
+                .cornerRadius(20)
             }
+
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(uiColor: .systemBackground))
+        .background(AppTheme.background)
     }
 
     private var unlockedView: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.32, green: 0.08, blue: 0.42),
-                    Color(red: 0.38, green: 0.1, blue: 0.48),
-                    Color(red: 0.28, green: 0.06, blue: 0.38)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            AppTheme.backgroundGradient.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 headerBar
@@ -317,98 +473,219 @@ struct SpaceDetailView: View {
                         imagePickerSource: $imagePickerSource
                     )
                 } else {
+                    spaceToolbar
+
                     ScrollView {
+                        if viewMode == .grid {
                         LazyVGrid(
                             columns: [
-                                GridItem(.flexible(), spacing: 16),
-                                GridItem(.flexible(), spacing: 16),
-                                GridItem(.flexible(), spacing: 16)
-                            ],
-                            spacing: 20
-                        ) {
-                            ForEach(viewModel.files) { file in
-                                FileCardView(
-                                    file: file,
-                                    isSelected: selectedFiles.contains(file.id),
-                                    onSelect: {
-                                        if selectedFiles.contains(file.id) {
-                                            selectedFiles.remove(file.id)
-                                        } else {
-                                            selectedFiles.insert(file.id)
-                                        }
-                                    },
-                                    onDelete: {
-                                        fileToDelete = file
-                                        showDeleteConfirmation = true
-                                    }
-                                )
+                                    GridItem(.flexible(), spacing: 14),
+                                    GridItem(.flexible(), spacing: 14)
+                                ],
+                                spacing: 16
+                            ) {
+                                ForEach(sortedSpaceFiles) { file in
+                                    spaceFileItem(file)
+                                }
                             }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
+                            .padding(.vertical, 12)
+                                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(sortedSpaceFiles) { file in
+                                    spaceFileItem(file, mode: .list)
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
                     }
-                    .background(Color(uiColor: .systemBackground))
+                    .background(
+                        ZStack {
+                            AppTheme.background
+                            Color(hex: space.color).opacity(0.03)
+                        }
+                    )
                 }
             }
         }
     }
 
-    private var headerBar: some View {
-        HStack {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.primary)
+    private var sortedSpaceFiles: [VaultFile] {
+        var sorted = viewModel.files
+        switch sortOption {
+        case .name:
+            sorted.sort { sortDirection == .ascending ? $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending : $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedDescending }
+        case .date:
+            sorted.sort { sortDirection == .ascending ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt }
+        case .size:
+            sorted.sort { sortDirection == .ascending ? $0.sizeBytes < $1.sizeBytes : $0.sizeBytes > $1.sizeBytes }
+        case .space:
+            break
+        }
+        return sorted.filter { file in
+            switch cloudFilter {
+            case .all:
+                return true
+            case .cloud:
+                return file.syncStatus == .synced
+            case .local:
+                return file.syncStatus != .synced
             }
+        }
+    }
+
+    private func spaceFileItem(_ file: VaultFile, mode: VaultFileBrowserMode = .grid) -> some View {
+        VaultFileBrowserItemView(
+            file: file,
+            mode: mode,
+            isPro: isPro,
+            onOpen: { previewFile = file },
+            onPreview: { previewFile = file },
+            onMove: {
+                fileToMove = file
+                showMoveSheet = true
+            },
+            onRename: {
+                fileToRename = file
+                renameText = file.displayName
+            },
+            onDelete: {
+                fileToDelete = file
+                showDeleteConfirmation = true
+            },
+            onCloudUpload: {
+                SyncService.shared.queueFileForSync(file, force: true)
+            },
+            onCloudDelete: {
+                Task { await viewModel.removeFileFromCloud(file) }
+            }
+        )
+    }
+
+    private var spaceToolbar: some View {
+        HStack(spacing: 10) {
+            Text("\(sortedSpaceFiles.count) \(sortedSpaceFiles.count == 1 ? "file" : "files")")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(AppTheme.secondaryText)
 
             Spacer()
 
-            Text(space.name)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundColor(.primary)
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                if !selectedFiles.isEmpty {
-                    Button(action: { showMoveSheet = true }) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.orange)
-                    }
-
-                    Button(action: {
-                        Task {
-                            for fileId in selectedFiles {
-                                if let file = viewModel.files.first(where: { $0.id == fileId }) {
-                                    await viewModel.deleteFile(file)
-                                }
-                            }
-                            selectedFiles.removeAll()
-                        }
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.red)
-                    }
-
-                    Button(action: { selectedFiles.removeAll() }) {
-                        Text("Cancel")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.primary)
-                    }
-                } else {
-                    Button(action: { /* optional selection mode */ }) {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundColor(.primary)
+            if hasCloudBackup {
+                Picker("Storage Filter", selection: $cloudFilter) {
+                    ForEach(CloudFilterOption.allCases, id: \.self) { option in
+                        Text(option.rawValue).tag(option)
                     }
                 }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 180)
+            }
+
+            Button {
+                viewMode = viewMode == .grid ? .list : .grid
+            } label: {
+                Image(systemName: viewMode == .grid ? "list.bullet" : "square.grid.2x2")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(AppTheme.cardBackground)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.outline, lineWidth: 1))
+                    )
+            }
+
+            Menu {
+                Button { toggleSpaceSort(.name) } label: {
+                    Label("Name", systemImage: sortOption == .name ? "checkmark" : "circle")
+                }
+                Button { toggleSpaceSort(.date) } label: {
+                    Label("Date", systemImage: sortOption == .date ? "checkmark" : "circle")
+                }
+                Button { toggleSpaceSort(.size) } label: {
+                    Label("Size", systemImage: sortOption == .size ? "checkmark" : "circle")
+                }
+            } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(AppTheme.cardBackground)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.outline, lineWidth: 1))
+                    )
             }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(.ultraThinMaterial, in: Rectangle())
+        .padding(.vertical, 8)
+    }
+
+    private func toggleSpaceSort(_ option: FileSortOption) {
+        if sortOption == option {
+            sortDirection = sortDirection == .ascending ? .descending : .ascending
+        } else {
+            sortOption = option
+            sortDirection = option == .name ? .ascending : .descending
+        }
+    }
+
+    private var headerBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(AppTheme.headerTint)
+                }
+
+                Image(systemName: space.icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(8)
+                    .background(
+                        Circle().fill(Color(hex: space.color).opacity(0.8))
+                    )
+
+                Text(space.name)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(AppTheme.headerTint)
+
+                Spacer()
+
+                Menu {
+                    Button {
+                        showDocumentPicker = true
+                    } label: {
+                        Label("Files", systemImage: "doc")
+                    }
+                    Button {
+                        imagePickerSource = .photoLibrary
+                        showImagePicker = true
+                    } label: {
+                        Label("Photos", systemImage: "photo")
+                    }
+                    Button {
+                        imagePickerSource = .camera
+                        showImagePicker = true
+                    } label: {
+                        Label("Camera", systemImage: "camera")
+                    }
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(Color(hex: space.color))
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Rectangle()
+                .fill(Color(hex: space.color).opacity(0.12))
+                .frame(height: 3)
+        }
+        .background(AppTheme.cardBackground)
     }
 }
 
@@ -421,103 +698,69 @@ struct EmptySpaceView: View {
     @Binding var imagePickerSource: UIImagePickerController.SourceType
 
     var body: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: 0) {
             Spacer()
 
-            Image(systemName: "tray.and.arrow.down.fill")
-                .font(.system(size: 60, weight: .light))
-                .foregroundColor(.primary)
+            VStack(spacing: 20) {
+                Image(systemName: "square.grid.3x3.fill")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(AppTheme.accent.opacity(0.5))
+                    .padding(20)
+                    .background(
+                        Circle()
+                            .fill(AppTheme.accent.opacity(0.08))
+                    )
 
-            VStack(spacing: 16) {
-                Text("Ready to organize?")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(.primary)
+                Text("Your \(spaceName) space is ready")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(AppTheme.headerTint)
 
-                Text("Start building your \(spaceName) space by adding your first file.")
-                    .font(.system(size: 16))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+                Text("Tap + above to add your first file")
+                    .font(.system(size: 14))
+                    .foregroundColor(AppTheme.secondaryText)
             }
 
-            Button(action: { showDocumentPicker = true }) {
-                HStack(spacing: 12) {
-                    Image(systemName: "plus.circle")
-                    Text("Add Your First File")
-                        .font(.system(size: 17, weight: .semibold))
+            Spacer()
+
+            HStack(spacing: 16) {
+                emptyStateButton(icon: "doc", label: "Files") {
+                    showDocumentPicker = true
                 }
-                .foregroundColor(.primary)
-                .frame(maxWidth: 240)
-                .padding(.vertical, 16)
-                .background(
-                    RoundedRectangle(cornerRadius: 25)
-                        .stroke(Color.orange, lineWidth: 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 25)
-                                .fill(Color.orange.opacity(0.05))
-                        )
-                )
-            }
-
-            HStack(spacing: 24) {
-                Button("Files") { showDocumentPicker = true }
-                Button("Photos") {
-                    showImagePicker = true
+                emptyStateButton(icon: "photo", label: "Photos") {
                     imagePickerSource = .photoLibrary
-                }
-                Button("Camera") {
                     showImagePicker = true
+                }
+                emptyStateButton(icon: "camera", label: "Camera") {
                     imagePickerSource = .camera
+                    showImagePicker = true
                 }
             }
-            .padding(.top, 10)
-
-            Spacer()
+            .padding(.horizontal, 32)
+            .padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-}
 
-// MARK: - File Card (minimal)
-
-struct FileCardView: View {
-    let file: VaultFile
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        Button {
-            onSelect()
-        } label: {
-            VStack(spacing: 10) {
-                Image(systemName: file.isImage ? "photo.fill" : (file.isPDF ? "doc.fill" : "doc.text.fill"))
-                    .font(.system(size: 30))
-                    .foregroundColor(.orange)
-
-                Text(file.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
+    private func emptyStateButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(AppTheme.accent)
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.secondaryText)
             }
             .frame(maxWidth: .infinity)
-            .padding(12)
+            .padding(.vertical, 16)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.7))
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(AppTheme.cardBackground)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(isSelected ? Color.orange : Color.clear, lineWidth: 2)
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(AppTheme.accent.opacity(0.45), lineWidth: 1.5)
                     )
             )
-        }
-        .contextMenu {
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
         }
     }
 }
@@ -527,25 +770,30 @@ struct FileCardView: View {
 struct DocumentPicker: UIViewControllerRepresentable {
     let allowedContentTypes: [UTType]
     let onDocumentPicked: (URL) -> Void
+    /// Called when the user cancels; clears SwiftUI sheet/fullScreenCover so it doesn’t stick on a blank screen.
+    var onCancel: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: allowedContentTypes)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
+        picker.modalPresentationStyle = .fullScreen
         return picker
     }
 
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onDocumentPicked: onDocumentPicked)
+        Coordinator(onDocumentPicked: onDocumentPicked, onCancel: onCancel)
     }
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onDocumentPicked: (URL) -> Void
+        let onCancel: (() -> Void)?
 
-        init(onDocumentPicked: @escaping (URL) -> Void) {
+        init(onDocumentPicked: @escaping (URL) -> Void, onCancel: (() -> Void)?) {
             self.onDocumentPicked = onDocumentPicked
+            self.onCancel = onCancel
         }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
@@ -561,7 +809,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
             
             // Copy file to app's temporary directory so we can access it after the picker dismisses
             let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(UUID().uuidString)_\(url.lastPathComponent)")
+                .appendingPathComponent(url.lastPathComponent)
             
             do {
                 // Remove file if it already exists
@@ -575,10 +823,12 @@ struct DocumentPicker: UIViewControllerRepresentable {
             } catch {
                 print("Failed to copy document: \(error.localizedDescription)")
                 // Still try to use the original URL if copy fails
-                onDocumentPicked(url)
+            onDocumentPicked(url)
             }
         }
 
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel?()
+        }
     }
 }

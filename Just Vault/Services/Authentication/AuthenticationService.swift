@@ -21,6 +21,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     @Published var errorMessage: String?
     
     private var continuation: CheckedContinuation<Void, Error>?
+    private var cancellables = Set<AnyCancellable>()
     
     // AWS Configuration
     private let userPoolId = AWSConfig.userPoolId
@@ -30,13 +31,31 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     
     override init() {
         super.init()
-        // AWS SDK for Swift v1 will use default configuration
-        // Credentials will be provided by Cognito Identity Pool after authentication
+        NotificationCenter.default.publisher(for: .userProfileDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor in
+                    if let user = await self.loadCurrentUser() {
+                        self.currentUser = user
+                    }
+                }
+            }
+            .store(in: &cancellables)
+        Task { @MainActor in
+            await StoreKitService.shared.updatePurchasedProducts()
+            await StoreKitService.shared.applyTierToCurrentUser()
+            if let user = await self.loadCurrentUser() {
+                self.currentUser = user
+                self.isAuthenticated = true
+            }
+        }
     }
     
     /// Initiate Apple Sign In flow
     func signInWithApple() async throws {
         isLoading = true
+        errorMessage = nil
         defer { isLoading = false }
         
         return try await withCheckedThrowingContinuation { continuation in
@@ -57,34 +76,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         Task {
             do {
-                guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
-                      let identityToken = appleIDCredential.identityToken,
-                      let identityTokenString = String(data: identityToken, encoding: .utf8) else {
-                    continuation?.resume(throwing: AuthenticationError.appleSignInFailed)
-                    continuation = nil
-                    return
-                }
-                
-                let appleUserID = appleIDCredential.user
-                let email = appleIDCredential.email
-                let fullName = appleIDCredential.fullName
-                
-                // Exchange Apple token for Cognito token
-                let cognitoTokens = try await exchangeAppleTokenForCognito(identityToken: identityTokenString)
-                
-                // Get AWS credentials from Identity Pool
-                let cognitoIdentityId = try await getAWSCredentials(cognitoToken: cognitoTokens.idToken, tokens: cognitoTokens)
-                
-                // Create or load user
-                let user = try await createOrLoadUser(
-                    appleUserID: appleUserID,
-                    email: email,
-                    fullName: fullName,
-                    cognitoIdentityId: cognitoIdentityId
-                )
-                
-                currentUser = user
-                isAuthenticated = true
+                try await completeSignIn(with: authorization)
                 
                 continuation?.resume()
                 continuation = nil
@@ -103,6 +95,47 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         continuation = nil
     }
     
+    /// Handles the successful Apple authorization payload and completes the Cognito/AWS sign-in flow.
+    /// This can be called directly from custom Sign In with Apple buttons outside the delegate-driven path.
+    /// - Parameter enterApp: If `false`, the user profile and credentials are created locally but `isAuthenticated` stays `false` so the UI stays on sign-up until you finish IAP (paid plans). Then set `isAuthenticated = true` yourself.
+    func completeSignIn(with authorization: ASAuthorization, enterApp: Bool = true) async throws {
+        guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let identityToken = appleIDCredential.identityToken,
+              let identityTokenString = String(data: identityToken, encoding: .utf8) else {
+            throw AuthenticationError.appleSignInFailed
+        }
+        
+        let appleUserID = appleIDCredential.user
+        let email = appleIDCredential.email
+        let fullName = appleIDCredential.fullName
+        
+        let cognitoIdentityId = try await getAWSCredentials(appleIdentityToken: identityTokenString)
+        
+        let user = try await createOrLoadUser(
+            appleUserID: appleUserID,
+            email: email,
+            fullName: fullName,
+            cognitoIdentityId: cognitoIdentityId
+        )
+        
+        currentUser = user
+        isAuthenticated = enterApp
+    }
+
+    /// Clears session after Apple + backend work succeeded but the user did not complete paid signup (e.g. cancelled the App Store purchase). Keeps first-time sign-up UI (`isReturningUser` untouched).
+    func revertPendingPaidSignUpSession() async {
+        let userId = UserDefaults.standard.string(forKey: "currentUserId")
+        currentUser = nil
+        isAuthenticated = false
+        CredentialManager.shared.clearCredentials()
+        DynamoDBService.shared.clearClient()
+        UserDefaults.standard.removeObject(forKey: "currentUser")
+        UserDefaults.standard.removeObject(forKey: "currentUserId")
+        if let userId = userId {
+            UserDefaults.standard.removeObject(forKey: "currentUser_\(userId)")
+        }
+    }
+    
     // MARK: - ASAuthorizationControllerPresentationContextProviding
     
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -119,7 +152,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         // This uses Cognito's OIDC provider flow with Apple Sign-In
         
         // Create Cognito Identity Provider client
-        let config = try await CognitoIdentityProviderClient.CognitoIdentityProviderClientConfiguration(
+        let config = try await CognitoIdentityProviderClient.CognitoIdentityProviderClientConfig(
             region: region
         )
         let client = CognitoIdentityProviderClient(config: config)
@@ -159,19 +192,19 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         }
     }
     
-    private func getAWSCredentials(cognitoToken: String, tokens: CognitoTokens) async throws -> String {
-        // Get AWS credentials from Cognito Identity Pool
-        // This exchanges the Cognito ID token for temporary AWS credentials
+    private func getAWSCredentials(appleIdentityToken: String) async throws -> String {
+        // Use the Apple identity token directly with the Cognito Identity Pool.
+        // This avoids the fragile user-pool token exchange path and matches a
+        // standard "Sign in with Apple -> federated identity -> AWS credentials" flow.
         
         // Create Cognito Identity client
-        let config = try await CognitoIdentityClient.CognitoIdentityClientConfiguration(
+        let config = try await CognitoIdentityClient.CognitoIdentityClientConfig(
             region: region
         )
         let client = CognitoIdentityClient(config: config)
         
-        // Create logins dictionary with the Cognito User Pool provider
-        let userPoolProvider = "cognito-idp.\(region).amazonaws.com/\(userPoolId)"
-        let logins: [String: String] = [userPoolProvider: cognitoToken]
+        // Identity Pools use Apple's issuer string as the provider key.
+        let logins: [String: String] = ["appleid.apple.com": appleIdentityToken]
         
         // Step 1: Get Identity ID
         let getIdInput = GetIdInput(
@@ -179,7 +212,13 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
             logins: logins
         )
         
-        let getIdResponse = try await client.getId(input: getIdInput)
+        let getIdResponse: GetIdOutput
+        do {
+            getIdResponse = try await client.getId(input: getIdInput)
+        } catch {
+            print("Auth getId failed: \(error.localizedDescription)")
+            throw AuthenticationError.awsCredentialsFailed
+        }
         guard let identityId = getIdResponse.identityId else {
             throw AuthenticationError.awsCredentialsFailed
         }
@@ -190,7 +229,13 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
             logins: logins
         )
         
-        let credentialsResponse = try await client.getCredentialsForIdentity(input: getCredentialsInput)
+        let credentialsResponse: GetCredentialsForIdentityOutput
+        do {
+            credentialsResponse = try await client.getCredentialsForIdentity(input: getCredentialsInput)
+        } catch {
+            print("Auth getCredentialsForIdentity failed: \(error.localizedDescription)")
+            throw AuthenticationError.awsCredentialsFailed
+        }
         guard let awsCredentials = credentialsResponse.credentials else {
             throw AuthenticationError.awsCredentialsFailed
         }
@@ -203,7 +248,7 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
                 secretAccessKey: awsCredentials.secretKey, // Note: AWS SDK uses 'secretKey' not 'secretAccessKey'
                 sessionToken: awsCredentials.sessionToken,
                 expiration: awsCredentials.expiration,
-                tokens: tokens
+                tokens: nil
             )
         } catch {
             // Log error but don't fail authentication
@@ -223,6 +268,13 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         // Check if user exists locally
         if let existingUser = try? await loadUserFromLocalStorage(identityId: cognitoIdentityId) {
             return existingUser
+        }
+
+        // After reinstall, local storage may be gone even though the user still
+        // exists in DynamoDB. Restore the profile from cloud before creating a new one.
+        if let cloudUser = try? await DynamoDBService.shared.loadUserProfile(userId: cognitoIdentityId) {
+            try await saveUserToLocalStorage(cloudUser)
+            return cloudUser
         }
         
         // Create new user
@@ -287,9 +339,11 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
         // Save user JSON with identity ID as key
         let userKey = "currentUser_\(user.id)"
         UserDefaults.standard.set(userData, forKey: userKey)
+        currentUser = user
         
         // Synchronize to ensure data is saved
         UserDefaults.standard.synchronize()
+        NotificationCenter.default.post(name: .userProfileDidChange, object: nil)
     }
     
     // MARK: - Load Current User
@@ -310,17 +364,45 @@ class AuthenticationService: NSObject, ObservableObject, ASAuthorizationControll
     }
     
     // MARK: - Sign Out
-    
+
     func signOut() async {
-        // Clear local data
+        let userId = UserDefaults.standard.string(forKey: "currentUserId")
         currentUser = nil
         isAuthenticated = false
-        
-        // Clear AWS credentials
         CredentialManager.shared.clearCredentials()
-        
-        // Clear local storage
+        DynamoDBService.shared.clearClient()
         UserDefaults.standard.removeObject(forKey: "currentUser")
+        UserDefaults.standard.removeObject(forKey: "currentUserId")
+        if let userId = userId {
+            UserDefaults.standard.removeObject(forKey: "currentUser_\(userId)")
+        }
+        UserDefaults.standard.set(true, forKey: "com.justvault.isReturningUser")
+    }
+
+    // MARK: - Delete Account
+
+    /// Permanently deletes all user data (cloud + local) then signs out. Fails entirely if cloud step fails (no partial delete).
+    func deleteAccount(userId: String) async throws {
+        do {
+            try await DynamoDBService.shared.deleteAllUserCloudData(userId: userId)
+        } catch {
+            throw AccountDeletionError.cloudDeletionFailed(underlying: error)
+        }
+        let localFiles = (try? LocalFileMetadataService.shared.loadAllFiles(userId: userId)) ?? []
+        let storage = LocalStorageService()
+        for file in localFiles {
+            try? storage.deleteEncryptedFile(fileId: file.id)
+            try? storage.deleteEncryptedFile(fileId: "\(file.id)_thumb")
+            LocalFileMetadataService.shared.deleteFileMetadata(fileId: file.id, userId: userId, spaceId: file.spaceId)
+        }
+        let keys = UserDefaults.standard.dictionaryRepresentation().keys
+        for key in keys {
+            if key.hasPrefix("space_files_\(userId)_") || key.hasPrefix("file_metadata_\(userId)_") || key == "spaces_\(userId)" {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        try? SecureEnclaveManager.deleteMasterKey()
+        await signOut()
     }
 }
 
@@ -332,11 +414,41 @@ struct CognitoTokens {
     let refreshToken: String
 }
 
-enum AuthenticationError: Error {
+enum AuthenticationError: LocalizedError {
     case appleSignInFailed
     case cognitoTokenExchangeFailed
     case awsCredentialsFailed
     case userNotFound
     case notImplemented
+
+    var errorDescription: String? {
+        switch self {
+        case .appleSignInFailed:
+            return "Apple Sign In failed."
+        case .cognitoTokenExchangeFailed:
+            return "Cognito did not accept the Apple sign-in token."
+        case .awsCredentialsFailed:
+            return "AWS credentials could not be created for this Apple sign-in. Check the Cognito Identity Pool Apple provider setup."
+        case .userNotFound:
+            return "No saved user profile was found."
+        case .notImplemented:
+            return "This part of authentication is not implemented yet."
+        }
+    }
+}
+
+/// Thrown when cloud deletion fails (account is not deleted until this is resolved).
+enum AccountDeletionError: LocalizedError {
+    case cloudDeletionFailed(underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .cloudDeletionFailed(let err):
+            if err is CredentialError {
+                return "Your session has expired. Sign in again, then try deleting your account."
+            }
+            return "Deletion failed: your session may have expired or there was a network problem. Sign in again and try again."
+        }
+    }
 }
 

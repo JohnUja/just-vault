@@ -28,7 +28,7 @@ struct CreateSpaceView: View {
     ]
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
                     // Folder Name Section
@@ -37,7 +37,7 @@ struct CreateSpaceView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(
                                 LinearGradient(
-                                    colors: [Color.blue, Color.purple],
+                                    colors: [AppTheme.accent, AppTheme.accentSecondary],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
@@ -76,7 +76,7 @@ struct CreateSpaceView: View {
                                                 .fill(
                                                     selectedIcon == icon
                                                         ? LinearGradient(
-                                                            colors: [Color.blue, Color.purple],
+                                                            colors: [AppTheme.accent, AppTheme.accentSecondary],
                                                             startPoint: .topLeading,
                                                             endPoint: .bottomTrailing
                                                         )

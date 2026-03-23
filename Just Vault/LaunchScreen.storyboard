@@ -23,15 +23,9 @@
                                     <constraint firstAttribute="height" constant="120" id="height-constraint"/>
                                 </constraints>
                             </imageView>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Just™" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="just-label">
-                                <rect key="frame" x="146.66666666666666" y="556" width="100" height="36"/>
-                                <fontDescription key="fontDescription" type="system" weight="bold" pointSize="30"/>
-                                <color key="textColor" systemColor="labelColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Vault" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="vault-label">
-                                <rect key="frame" x="146.66666666666666" y="592" width="100" height="36"/>
-                                <fontDescription key="fontDescription" type="system" weight="bold" pointSize="30"/>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="JUST™" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="just-label">
+                                <rect key="frame" x="126.66666666666666" y="496" width="140" height="29"/>
+                                <fontDescription key="fontDescription" type="system" weight="medium" pointSize="24"/>
                                 <color key="textColor" systemColor="labelColor"/>
                                 <nil key="highlightedColor"/>
                             </label>
@@ -43,8 +37,6 @@
                             <constraint firstItem="app-icon-image" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" constant="-60" id="icon-center-y"/>
                             <constraint firstItem="just-label" firstAttribute="top" secondItem="app-icon-image" secondAttribute="bottom" constant="20" id="just-top"/>
                             <constraint firstItem="just-label" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="just-center-x"/>
-                            <constraint firstItem="vault-label" firstAttribute="top" secondItem="just-label" secondAttribute="bottom" constant="0" id="vault-top"/>
-                            <constraint firstItem="vault-label" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="vault-center-x"/>
                         </constraints>
                     </view>
                 </viewController>

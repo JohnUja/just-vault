@@ -2,7 +2,7 @@
 //  EditSpaceView.swift
 //  Just Vault
 //
-//  Edit space name, icon, and color
+//  Edit space name, icon, and color — same form as Create Space, different title/button.
 //
 
 import SwiftUI
@@ -16,16 +16,6 @@ struct EditSpaceView: View {
     @State private var selectedIcon: String
     @State private var selectedColor: String
     
-    let icons = [
-        "doc.text.fill", "briefcase.fill", "heart.fill", "house.fill",
-        "star.fill", "book.fill", "camera.fill", "folder.fill"
-    ]
-    
-    let colors = [
-        "#007AFF", "#FF3B30", "#34C759", "#FF9500",
-        "#AF52DE", "#5856D6", "#00C7BE", "#FFCC00"
-    ]
-    
     init(space: Space, onSave: @escaping (String, String, String) -> Void) {
         self.space = space
         self.onSave = onSave
@@ -35,144 +25,112 @@ struct EditSpaceView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 24) {
-                // Preview
-                VStack(spacing: 16) {
-                    Text("Preview")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    
-                    SpaceHexagonView(
-                        space: Space(
-                            id: space.id,
-                            userId: space.userId,
-                            name: spaceName,
-                            icon: selectedIcon,
-                            color: selectedColor,
-                            isLocked: space.isLocked,
-                            orderIndex: space.orderIndex,
-                            createdAt: space.createdAt,
-                            fileCount: space.fileCount
-                        ),
-                        isSelected: false,
-                        onTap: {},
-                        onLongPress: {},
-                        onEdit: {},
-                        onLock: {},
-                        onUnlock: {},
-                        onDelete: {}
-                    )
-                    .frame(width: 100, height: 100)
-                }
-                .padding(.top, 20)
-                
-                // Folder Name
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Folder Name")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    
-                    TextField("Enter folder name", text: $spaceName)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                }
-                .padding(.horizontal, 20)
-                
-                // Icons
-                VStack(spacing: 12) {
-                    Text("Icon")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                    
-                    VStack(spacing: 12) {
-                        HStack(spacing: 12) {
-                            ForEach(icons.prefix(4), id: \.self) { icon in
-                                IconButton(
-                                    icon: icon,
-                                    isSelected: selectedIcon == icon,
-                                    onSelect: { selectedIcon = icon }
-                                )
-                            }
-                        }
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Preview
+                    VStack(spacing: 16) {
+                        Text("Preview")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.secondary)
                         
-                        HStack(spacing: 12) {
-                            ForEach(icons.suffix(4), id: \.self) { icon in
-                                IconButton(
-                                    icon: icon,
-                                    isSelected: selectedIcon == icon,
-                                    onSelect: { selectedIcon = icon }
-                                )
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                
-                // Colors
-                VStack(spacing: 12) {
-                    Text("Color")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-                    
-                    VStack(spacing: 12) {
-                        HStack(spacing: 12) {
-                            ForEach(colors.prefix(4), id: \.self) { color in
-                                ColorButton(
-                                    color: color,
-                                    isSelected: selectedColor == color,
-                                    onSelect: { selectedColor = color }
-                                )
-                            }
-                        }
-                        
-                        HStack(spacing: 12) {
-                            ForEach(colors.suffix(4), id: \.self) { color in
-                                ColorButton(
-                                    color: color,
-                                    isSelected: selectedColor == color,
-                                    onSelect: { selectedColor = color }
-                                )
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                
-                Spacer()
-                
-                // Save Button
-                Button(action: {
-                    onSave(spaceName.trimmingCharacters(in: .whitespaces), selectedIcon, selectedColor)
-                    dismiss()
-                }) {
-                    Text("Save")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            LinearGradient(
-                                colors: [Color.orange, Color.orange.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+                        SpaceHexagonView(
+                            space: Space(
+                                id: space.id,
+                                userId: space.userId,
+                                name: spaceName,
+                                icon: selectedIcon,
+                                color: selectedColor,
+                                isLocked: space.isLocked,
+                                orderIndex: space.orderIndex,
+                                createdAt: space.createdAt,
+                                fileCount: space.fileCount
+                            ),
+                            isSelected: false,
+                            onTap: {},
+                            onLongPress: {},
+                            onEdit: {},
+                            onLock: {},
+                            onUnlock: {},
+                            onDelete: {}
                         )
-                        .cornerRadius(12)
+                        .frame(width: 100, height: 100)
+                    }
+                    .padding(.top, 20)
+                    
+                    // Folder Name (same label as Create)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Space Name")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        TextField("e.g., Work, Personal, Projects", text: $spaceName)
+                            .textFieldStyle(.roundedBorder)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Icons — same set as Create Space
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Choose Icon")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                            ForEach(CreateSpacePopupView.icons, id: \.self) { icon in
+                                IconButton(
+                                    icon: icon,
+                                    isSelected: selectedIcon == icon,
+                                    onSelect: { selectedIcon = icon }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Colors — same set as Create Space
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Choose Color")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.primary)
+                        
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                            ForEach(CreateSpacePopupView.colors, id: \.self) { color in
+                                ColorButton(
+                                    color: color,
+                                    isSelected: selectedColor == color,
+                                    onSelect: { selectedColor = color }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Save button inside ScrollView so keyboard doesn't cover it
+                    Button(action: {
+                        onSave(spaceName.trimmingCharacters(in: .whitespaces), selectedIcon, selectedColor)
+                        dismiss()
+                    }) {
+                        Text("Save")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(AppTheme.accentGradient)
+                            .cornerRadius(12)
+                    }
+                    .disabled(spaceName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 48)
                 }
-                .disabled(spaceName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Edit Space")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }

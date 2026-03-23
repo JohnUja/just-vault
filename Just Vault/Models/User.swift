@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UniformTypeIdentifiers
 
 struct User: Codable, Identifiable, Equatable {
     let id: String // Cognito Identity ID
@@ -22,6 +23,7 @@ struct User: Codable, Identifiable, Equatable {
     // Storage
     var cloudStorageUsedBytes: Int64
     var cloudStorageQuotaBytes: Int64
+    var lastSyncAt: Date? = nil
     
     var cloudStorageUsedMB: Double {
         Double(cloudStorageUsedBytes) / 1_000_000.0
@@ -30,30 +32,46 @@ struct User: Codable, Identifiable, Equatable {
     var cloudStorageQuotaMB: Double {
         Double(cloudStorageQuotaBytes) / 1_000_000.0
     }
+
+    var effectiveCloudStorageQuotaBytes: Int64 {
+        max(cloudStorageQuotaBytes, effectiveTier.cloudStorageMB * 1_000_000)
+    }
+
+    var effectiveCloudStorageQuotaMB: Double {
+        Double(effectiveCloudStorageQuotaBytes) / 1_000_000.0
+    }
     
     var cloudStorageUsagePercent: Double {
         guard cloudStorageQuotaBytes > 0 else { return 0 }
         return Double(cloudStorageUsedBytes) / Double(cloudStorageQuotaBytes)
     }
+
+    var effectiveCloudStorageUsagePercent: Double {
+        guard effectiveCloudStorageQuotaBytes > 0 else { return 0 }
+        return Double(cloudStorageUsedBytes) / Double(effectiveCloudStorageQuotaBytes)
+    }
     
     var isPro: Bool {
-        if DeveloperMode.isEnabled {
-            return true // Developer mode unlocks all features
+        if DeveloperMode.isEnabled, let override = DeveloperMode.overrideTier {
+            return override == .pro || override == .proPlus
         }
+        if DeveloperMode.isEnabled { return true }
         return subscriptionTier == .pro || subscriptionTier == .proPlus
     }
     
     var hasCloudBackup: Bool {
-        if DeveloperMode.isEnabled {
-            return true // Developer mode unlocks cloud backup
+        if DeveloperMode.isEnabled, let override = DeveloperMode.overrideTier {
+            return override != .free
         }
+        if DeveloperMode.isEnabled { return true }
         return subscriptionTier != .free
     }
     
     var effectiveTier: SubscriptionTier {
-        if DeveloperMode.isEnabled {
-            return .proPlus // Developer mode = Pro+
+        if DeveloperMode.isEnabled, let override = DeveloperMode.overrideTier {
+            return override
         }
+        if DeveloperMode.isEnabled { return .proPlus }
         return subscriptionTier
     }
     
@@ -89,10 +107,40 @@ enum SubscriptionTier: String, Codable {
     
     var maxSpaces: Int {
         switch self {
-        case .free: return 3
-        case .pro: return 20
-        case .proPlus: return 20
+        case .free: return 6
+        case .pro: return 6
+        case .proPlus: return Int.max
         }
+    }
+
+    /// Allowed document-picker content types (no video in v1).
+    var allowedContentTypes: [UTType] {
+        let optionals: [UTType?] = [
+            // Images
+            .pdf, .jpeg, .png, .heic, .tiff, .gif, .bmp,
+            UTType(tag: "webp", tagClass: .filenameExtension, conformingTo: .image), // WebP
+            // Documents & text
+            .plainText, .rtf, .commaSeparatedText, // CSV
+            .spreadsheet, // Excel, Numbers, etc.
+            .presentation, // PowerPoint, Keynote
+            UTType(tag: "docx", tagClass: .filenameExtension, conformingTo: .data), // Word
+            UTType(tag: "doc", tagClass: .filenameExtension, conformingTo: .data),  // Word (legacy)
+            UTType(tag: "pages", tagClass: .filenameExtension, conformingTo: .data), // Apple Pages
+            UTType(tag: "numbers", tagClass: .filenameExtension, conformingTo: .data), // Apple Numbers
+            UTType(tag: "key", tagClass: .filenameExtension, conformingTo: .data),   // Apple Keynote
+            // Archives
+            .zip, .gzip,
+            // Intentionally not including `.data` to keep document picker fast and focused.
+        ]
+        return optionals.compactMap { $0 }
+    }
+
+    var maxFileSizeBytes: Int64 {
+        AppConfig.maxFileSizeBytes(for: self)
+    }
+
+    var maxFileSizeMB: Int {
+        AppConfig.maxFileSizeMB(for: self)
     }
 }
 
@@ -101,5 +149,12 @@ enum SubscriptionStatus: String, Codable {
     case expired
     case canceled
     case none
+}
+
+// MARK: - Subscription billing period (StoreKit)
+
+enum BillingPeriod {
+    case monthly
+    case yearly
 }
 
