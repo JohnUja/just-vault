@@ -479,11 +479,11 @@ struct SpaceDetailView: View {
                         if viewMode == .grid {
                         LazyVGrid(
                             columns: [
-                                    GridItem(.flexible(), spacing: 14),
-                                    GridItem(.flexible(), spacing: 14)
-                                ],
-                                spacing: 16
-                            ) {
+                                GridItem(.flexible(), spacing: 14, alignment: .top),
+                                GridItem(.flexible(), spacing: 14, alignment: .top)
+                            ],
+                            spacing: 16
+                        ) {
                                 ForEach(sortedSpaceFiles) { file in
                                     spaceFileItem(file)
                                 }

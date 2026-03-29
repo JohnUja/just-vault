@@ -39,6 +39,8 @@ struct AskUserNameView: View {
                 TextField("Your name", text: $displayName)
                     .textContentType(.name)
                     .autocorrectionDisabled()
+                    .foregroundStyle(AppTheme.headerTint)
+                    .tint(AppTheme.accent)
                     .padding()
                     .background(AppTheme.cardBackground)
                     .cornerRadius(12)

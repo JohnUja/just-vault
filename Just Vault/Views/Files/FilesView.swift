@@ -243,8 +243,8 @@ struct FilesView: View {
     
     private var gridColumns: [GridItem] {
         [
-            GridItem(.flexible(), spacing: 16),
-            GridItem(.flexible(), spacing: 16)
+            GridItem(.flexible(), spacing: 16, alignment: .top),
+            GridItem(.flexible(), spacing: 16, alignment: .top)
         ]
     }
     

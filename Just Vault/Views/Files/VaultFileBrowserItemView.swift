@@ -69,32 +69,36 @@ struct VaultFileBrowserItemView: View {
         }
     }
     
-    // MARK: - Grid Card (fixed-height thumbnail box so all files look the same shape)
-    
+    // MARK: - Grid Card (wide rectangle: full column width × fixed height — same silhouette as early grid, without overlap bugs)
+
+    private static let gridPreviewHeight: CGFloat = 118
+
     private var gridCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
-                VaultFileThumbnailView(file: file)
-                    .aspectRatio(4/5, contentMode: .fill)
-                    .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118)
+                VaultFileThumbnailView(file: file, cornerRadius: 0)
+                    .scaledToFill()
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()
-                    .background(AppTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(AppTheme.accent.opacity(0.35), lineWidth: 1)
-                    )
 
                 syncBadge
                     .padding(6)
             }
-            .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118)
-            .clipped()
+            .frame(maxWidth: .infinity, minHeight: Self.gridPreviewHeight, maxHeight: Self.gridPreviewHeight)
+            .background(AppTheme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(AppTheme.accent.opacity(0.35), lineWidth: 1)
+            )
 
             Text(displayName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(AppTheme.headerTint)
                 .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 4) {
                 Text(formattedDate)
@@ -104,8 +108,9 @@ struct VaultFileBrowserItemView: View {
             .font(.system(size: 10))
             .foregroundColor(AppTheme.secondaryText)
             .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
     
     // MARK: - List Row

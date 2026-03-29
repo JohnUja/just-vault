@@ -27,6 +27,8 @@ struct SearchView: View {
                     TextField("Search files and spaces...", text: $searchText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .foregroundStyle(AppTheme.headerTint)
+                        .tint(AppTheme.accent)
                         .onChange(of: searchText) { oldValue, newValue in
                             Task {
                                 await viewModel.search(

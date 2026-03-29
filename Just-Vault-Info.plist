@@ -16,7 +16,7 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Keep needs access to your photos to securely store them in your vault.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Keep needs camera access to capture photos and securely store them in your vault.</string>
+	<string>Keep uses the camera only when you choose to take a new photo to import into your encrypted vault—for example, to photograph a document, receipt, or ID you want stored as a vault file. Photos you take are saved only where you save them in Keep and are not used for advertising.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Keep needs access to your files to securely store them in your vault.</string>
 	<key>NSFaceIDUsageDescription</key>
